@@ -1,7 +1,7 @@
 # ReaSCAN-Causal
 Causal Abstraction of Neural Models Trained to Solve ReaSCAN
 
-## Installation
+Installation
 ==========================================================================
 First clone the directory. Then run the following command to initialize the submodules:
 
