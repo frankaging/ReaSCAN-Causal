@@ -1,3 +1,6 @@
 [submodule "codes/antra"]
 	path = codes/antra
 	url = git@github.com:hansonhl/antra.git
+[submodule "codes/Reason-SCAN"]
+	path = codes/Reason-SCAN
+	url = https://github.com/frankaging/Reason-SCAN
