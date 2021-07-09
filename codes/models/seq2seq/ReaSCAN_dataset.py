@@ -9,7 +9,8 @@ import torch
 import numpy as np
 
 import sys
-sys.path.append(os.path.join(os.path.dirname("__file__"), '..', '..', 'dataset', 'Reason-SCAN', 'code'))
+sys.path.append(os.path.join(os.path.dirname("__file__"), '..', '..', 'Reason-SCAN', 'code', 'dataset'))
+
 def isnotebook():
     try:
         shell = get_ipython().__class__.__name__

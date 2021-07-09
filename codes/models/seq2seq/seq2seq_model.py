@@ -90,7 +90,7 @@ class EncoderRNN(nn.Module):
 
     def extra_repr(self) -> str:
         return "EncoderRNN\n bidirectional={} \n num_layers={}\n hidden_size={}\n dropout={}\n "\
-               "n_input_symbols={}\n".format(self.bidirectional, self.num_lauers, self.hidden_size,
+               "n_input_symbols={}\n".format(self.bidirectional, self.num_layers, self.hidden_size,
                                              self.dropout_probability, self.input_size)
 
 
