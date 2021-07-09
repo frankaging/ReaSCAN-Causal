@@ -5,6 +5,6 @@ Installation
 ==========================================================================
 First clone the directory. Then run the following command to initialize the submodules:
 
-.. code:: bash
-
-   git submodule init; git submodule update
+```bash
+git submodule init; git submodule update
+```
