@@ -4,3 +4,6 @@
 [submodule "codes/Reason-SCAN"]
 	path = codes/Reason-SCAN
 	url = https://github.com/frankaging/Reason-SCAN
+[submodule "codes/models/seq2seq/antra"]
+	path = codes/models/seq2seq/antra
+	url = git@github.com:hansonhl/antra.git

@@ -44,7 +44,7 @@ class EncoderRNN(nn.Module):
         self.lstm = nn.LSTM(input_size=rnn_input_size, hidden_size=hidden_size, num_layers=num_layers,
                             dropout=dropout_probability, bidirectional=bidirectional)
 
-    def forward(self, input_batch: torch.LongTensor, input_lengths: List[int]) -> Tuple[torch.Tensor, dict]:
+    def forward(self, input_batch: torch.LongTensor, input_lengths: List[int], return_as_dict=True):
         """
         :param input_batch: [batch_size, max_length]; batched padded input sequences
         :param input_lengths: length of each padded input sequence.
@@ -87,7 +87,7 @@ class EncoderRNN(nn.Module):
         output_per_timestep = output_per_timestep.index_select(dim=1, index=unperm_idx)
         input_lengths = input_lengths[unperm_idx].tolist()
         return hidden, {"encoder_outputs": output_per_timestep, "sequence_lengths": input_lengths}
-
+    
     def extra_repr(self) -> str:
         return "EncoderRNN\n bidirectional={} \n num_layers={}\n hidden_size={}\n dropout={}\n "\
                "n_input_symbols={}\n".format(self.bidirectional, self.num_layers, self.hidden_size,
