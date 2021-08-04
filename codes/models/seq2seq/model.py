@@ -12,7 +12,6 @@ from seq2seq.cnn_model import ConvolutionalNet
 from seq2seq.cnn_model import DownSamplingConvolutionalNet
 from seq2seq.seq2seq_model import EncoderRNN
 from seq2seq.seq2seq_model import Attention
-from seq2seq.seq2seq_model import LuongAttentionDecoderRNN
 from seq2seq.seq2seq_model import BahdanauAttentionDecoderRNN
 
 def isnotebook():
@@ -99,13 +98,6 @@ class Model(nn.Module):
                                                                  textual_attention=self.textual_attention,
                                                                  visual_attention=self.visual_attention,
                                                                  conditional_attention=conditional_attention)
-        elif attention_type == "luong":
-            logger.warning("Luong attention not correctly implemented.")
-            self.attention_decoder = LuongAttentionDecoderRNN(hidden_size=decoder_hidden_size,
-                                                              output_size=target_vocabulary_size,
-                                                              num_layers=num_decoder_layers,
-                                                              dropout_probability=decoder_dropout_p,
-                                                              conditional_attention=conditional_attention)
         else:
             raise ValueError("Unknown attention type {} specified.".format(attention_type))
 
@@ -165,6 +157,7 @@ class Model(nn.Module):
         :param targets: ground-truth targets of size [batch_size, max_target_length]
         :return: scalar negative log-likelihood loss averaged over the sequence length and batch size.
         """
+        
         targets = self.remove_start_of_sequence(targets)
 
         # Calculate the loss.

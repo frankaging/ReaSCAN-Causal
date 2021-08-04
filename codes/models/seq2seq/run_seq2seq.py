@@ -1,97 +1,38 @@
-import torch
-import numpy as np
-from typing import List
-import logging
+#!/usr/bin/env python
+# coding: utf-8
+
+# In[ ]:
+
+
 import argparse
+import logging
+import os
+import torch
+import sys
+sys.path.append(os.path.join(os.path.dirname("__file__"), '..'))
 
-logger = logging.getLogger(__name__)
-
-def isnotebook():
-    try:
-        shell = get_ipython().__class__.__name__
-        if shell == 'ZMQInteractiveShell':
-            return True   # Jupyter notebook or qtconsole
-        elif shell == 'TerminalInteractiveShell':
-            return False  # Terminal running IPython
-        else:
-            return False  # Other type (?)
-    except NameError:
-        return False      # Probably standard Python interpreter
-if isnotebook():
-    device = torch.device("cpu")
-else:
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-def sequence_mask(sequence_lengths: torch.LongTensor, max_len=None) -> torch.tensor:
-    """
-    Create a sequence mask that masks out all indices larger than some sequence length as defined by
-    sequence_lengths entries.
-
-    :param sequence_lengths: [batch_size] sequence lengths per example in batch
-    :param max_len: int defining the maximum sequence length in the batch
-    :return: [batch_size, max_len] boolean mask
-    """
-    if max_len is None:
-        max_len = sequence_lengths.data.max()
-    batch_size = sequence_lengths.size(0)
-    sequence_range = torch.arange(0, max_len).long().to(device=device)
-
-    # [batch_size, max_len]
-    sequence_range_expand = sequence_range.unsqueeze(0).expand(batch_size, max_len)
-
-    # [batch_size, max_len]
-    seq_length_expand = (sequence_lengths.unsqueeze(1).expand_as(sequence_range_expand))
-
-    # [batch_size, max_len](boolean array of which elements to include)
-    return sequence_range_expand < seq_length_expand
+from decode_graphical_models import *
+from seq2seq.ReaSCAN_dataset import *
 
 
-def log_parameters(model: torch.nn.Module) -> {}:
-    model_parameters = filter(lambda p: p.requires_grad, model.parameters())
-    n_params = sum([np.prod(p.size()) for p in model_parameters])
-    logger.info("Total parameters: %d" % n_params)
-    for name, p in model.named_parameters():
-        if p.requires_grad:
-            logger.info("%s : %s" % (name, list(p.size())))
+# In[ ]:
 
-
-def sequence_accuracy(prediction: List[int], target: List[int]) -> float:
-    correct = 0
-    total = 0
-    prediction = prediction.copy()
-    target = target.copy()
-    if len(prediction) < len(target):
-        difference = len(target) - len(prediction)
-        prediction.extend([0] * difference)
-    if len(target) < len(prediction):
-        difference = len(prediction) - len(target)
-        target.extend([-1] * difference)
-    for i, target_int in enumerate(target):
-        if i >= len(prediction):
-            break
-        prediction_int = prediction[i]
-        if prediction_int == target_int:
-            correct += 1
-        total += 1
-    if not total:
-        return 0.
-    return (correct / total) * 100
 
 def arg_parse():
     parser = argparse.ArgumentParser(description="Sequence to sequence models for Grounded SCAN")
 
     # General arguments
-    parser.add_argument("--mode", type=str, default="train", help="train, test or predict")
+    parser.add_argument("--mode", type=str, default="run_tests", help="train, test or predict", required=True)
     parser.add_argument("--output_directory", type=str, default="output", help="In this directory the models will be "
                                                                                "saved. Will be created if doesn't exist.")
     parser.add_argument("--resume_from_file", type=str, default="", help="Full path to previously saved model to load.")
 
     # Data arguments
     parser.add_argument("--split", type=str, default="test", help="Which split to get from Grounded Scan.")
-    parser.add_argument("--data_directory", type=str, default="../../../data-files/ReaSCAN-Simple/", help="Path to folder with data.")
-    parser.add_argument("--input_vocab_path", type=str, default="input_vocabulary.txt",
+    parser.add_argument("--data_directory", type=str, default="data/uniform_dataset", help="Path to folder with data.")
+    parser.add_argument("--input_vocab_path", type=str, default="training_input_vocab.txt",
                         help="Path to file with input vocabulary as saved by Vocabulary class in gSCAN_dataset.py")
-    parser.add_argument("--target_vocab_path", type=str, default="target_vocabulary.txt",
+    parser.add_argument("--target_vocab_path", type=str, default="training_target_vocab.txt",
                         help="Path to file with target vocabulary as saved by Vocabulary class in gSCAN_dataset.py")
     parser.add_argument("--generate_vocabularies", dest="generate_vocabularies", default=False, action="store_true",
                         help="Whether to generate vocabularies based on the data.")
@@ -167,3 +108,19 @@ def arg_parse():
     except:
         args = parser.parse_args()
     return args
+
+
+# In[ ]:
+
+
+if __name__ == "__main__":
+    
+    # Loading arguments
+    args = arg_parse()
+    try:        
+        get_ipython().run_line_magic('matplotlib', 'inline')
+        is_jupyter = True
+    except:
+        is_jupyter = False
+    print(args)
+

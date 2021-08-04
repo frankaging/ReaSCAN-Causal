@@ -7,25 +7,28 @@ from collections import Counter
 import json
 import torch
 import numpy as np
+from torch.utils.data import DataLoader, TensorDataset
 
 import sys
 sys.path.append(os.path.join(os.path.dirname("__file__"), '..', '..', 'Reason-SCAN', 'code', 'dataset'))
 
-def isnotebook():
-    try:
-        shell = get_ipython().__class__.__name__
-        if shell == 'ZMQInteractiveShell':
-            return True   # Jupyter notebook or qtconsole
-        elif shell == 'TerminalInteractiveShell':
-            return False  # Terminal running IPython
-        else:
-            return False  # Other type (?)
-    except NameError:
-        return False      # Probably standard Python interpreter
-if isnotebook():
-    device = torch.device("cpu")
-else:
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# we want to make this file device irrelevant,
+# and we decide where to store the data afterwards.
+# def isnotebook():
+#     try:
+#         shell = get_ipython().__class__.__name__
+#         if shell == 'ZMQInteractiveShell':
+#             return True   # Jupyter notebook or qtconsole
+#         elif shell == 'TerminalInteractiveShell':
+#             return False  # Terminal running IPython
+#         else:
+#             return False  # Other type (?)
+#     except NameError:
+#         return False      # Probably standard Python interpreter
+# if isnotebook():
+#     device = torch.device("cpu")
+# else:
+#     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 FORMAT = "%(asctime)-15s %(message)s"
 logging.basicConfig(format=FORMAT, level=logging.INFO,
@@ -274,7 +277,74 @@ class ReaSCANDataset(object):
         self._examples = self._examples[random_permutation]
         self._target_lengths = self._target_lengths[random_permutation]
         self._input_lengths = self._input_lengths[random_permutation]
+    
+    def get_max_seq_length_input(self):
+        input_lengths = self._input_lengths
+        max_input_length = np.max(input_lengths)
+        return max_input_length
+     
+    def get_max_seq_length_target(self):
+        target_lengths = self._target_lengths
+        max_target_length = np.max(target_lengths)
+        return max_target_length
+    
+    def get_dataset(self):
+        examples = self._examples
+        
+        # get length.
+        input_lengths = self._input_lengths
+        target_lengths = self._target_lengths
+        max_input_length = np.max(input_lengths)
+        max_target_length = np.max(target_lengths)
+        
+        # return structs
+        input_batch = []
+        target_batch = []
+        situation_batch = []
+        situation_representation_batch = []
+        derivation_representation_batch = []
+        agent_positions_batch = []
+        target_positions_batch = []
 
+        for example in examples:
+            to_pad_input = max_input_length - example["input_tensor"].size(1)
+            to_pad_target = max_target_length - example["target_tensor"].size(1)
+            padded_input = torch.cat([
+                example["input_tensor"],
+                torch.zeros(int(to_pad_input), dtype=torch.long).unsqueeze(0)], dim=1)
+            # padded_input = torch.cat([
+            #     torch.zeros_like(example["input_tensor"], dtype=torch.long),
+            #     torch.zeros(int(to_pad_input), dtype=torch.long).unsqueeze(0)], dim=1) # TODO: change back
+            padded_target = torch.cat([
+                example["target_tensor"],
+                torch.zeros(int(to_pad_target), dtype=torch.long).unsqueeze(0)], dim=1)
+            input_batch.append(padded_input)
+            target_batch.append(padded_target)
+            situation_batch.append(example["situation_tensor"])
+            situation_representation_batch.append(example["situation_representation"])
+            derivation_representation_batch.append(example["derivation_representation"])
+            agent_positions_batch.append(example["agent_position"])
+            target_positions_batch.append(example["target_position"])
+        
+        input_batch = torch.cat(input_batch, dim=0)
+        target_batch = torch.cat(target_batch, dim=0)
+        situation_batch = torch.cat(situation_batch, dim=0)
+        agent_positions_batch = torch.cat(agent_positions_batch, dim=0)
+        target_positions_batch = torch.cat(target_positions_batch, dim=0)
+        input_lengths_batch = torch.tensor([[l] for l in input_lengths], dtype=torch.long)
+        target_lengths_batch = torch.tensor([[l] for l in target_lengths], dtype=torch.long)
+        main_dataset = TensorDataset(
+            input_batch, target_batch, situation_batch, agent_positions_batch, 
+            target_positions_batch, input_lengths_batch, target_lengths_batch
+        )
+
+        # with non-tensorized outputs
+        return main_dataset, (situation_representation_batch, derivation_representation_batch)
+        
+            
+    """
+    Deprecated. We may want to deprecate this function, so we want use multi-gpu settings.
+    """
     def get_data_iterator(self, batch_size=10) -> Tuple[torch.Tensor, List[int], torch.Tensor, List[dict],
                                                         torch.Tensor, List[int], torch.Tensor, torch.Tensor]:
         """
@@ -305,13 +375,13 @@ class ReaSCANDataset(object):
                 to_pad_target = max_target_length - example["target_tensor"].size(1)
                 padded_input = torch.cat([
                     example["input_tensor"],
-                    torch.zeros(int(to_pad_input), dtype=torch.long, device=device).unsqueeze(0)], dim=1)
+                    torch.zeros(int(to_pad_input), dtype=torch.long).unsqueeze(0)], dim=1)
                 # padded_input = torch.cat([
-                #     torch.zeros_like(example["input_tensor"], dtype=torch.long, device=device),
-                #     torch.zeros(int(to_pad_input), dtype=torch.long, device=devicedevice).unsqueeze(0)], dim=1) # TODO: change back
+                #     torch.zeros_like(example["input_tensor"], dtype=torch.long),
+                #     torch.zeros(int(to_pad_input), dtype=torch.long).unsqueeze(0)], dim=1) # TODO: change back
                 padded_target = torch.cat([
                     example["target_tensor"],
-                    torch.zeros(int(to_pad_target), dtype=torch.long, device=device).unsqueeze(0)], dim=1)
+                    torch.zeros(int(to_pad_target), dtype=torch.long).unsqueeze(0)], dim=1)
                 input_batch.append(padded_input)
                 target_batch.append(padded_target)
                 situation_batch.append(example["situation_tensor"])
@@ -358,24 +428,21 @@ class ReaSCANDataset(object):
             input_array = self.sentence_to_array(input_commands, vocabulary="input")
             target_array = self.sentence_to_array(target_commands, vocabulary="target")
             #equivalent_target_array = self.sentence_to_array(equivalent_target_commands, vocabulary="target")
-            empty_example["input_tensor"] = torch.tensor(input_array, dtype=torch.long, device=device).unsqueeze(
+            empty_example["input_tensor"] = torch.tensor(input_array, dtype=torch.long).unsqueeze(
                 dim=0)
-            empty_example["target_tensor"] = torch.tensor(target_array, dtype=torch.long, device=device).unsqueeze(
+            empty_example["target_tensor"] = torch.tensor(target_array, dtype=torch.long).unsqueeze(
                 dim=0)
-            #empty_example["equivalent_target_tensor"] = torch.tensor(equivalent_target_array, dtype=torch.long,
-            #                                                         device=device).unsqueeze(dim=0)
-            empty_example["situation_tensor"] = torch.tensor(situation_image, dtype=torch.float, device=device
-                                                             ).unsqueeze(dim=0)
+            #empty_example["equivalent_target_tensor"] = torch.tensor(equivalent_target_array, dtype=torch.long).unsqueeze(dim=0)
+            empty_example["situation_tensor"] = torch.tensor(situation_image, dtype=torch.float).unsqueeze(dim=0)
             empty_example["situation_representation"] = situation_repr
             empty_example["derivation_representation"] = example["derivation_representation"]
             empty_example["agent_position"] = torch.tensor(
                 (int(situation_repr["agent_position"]["row"]) * int(situation_repr["grid_size"])) +
-                int(situation_repr["agent_position"]["column"]), dtype=torch.long,
-                device=device).unsqueeze(dim=0)
+                int(situation_repr["agent_position"]["column"]), dtype=torch.long).unsqueeze(dim=0)
             empty_example["target_position"] = torch.tensor(
                 (int(situation_repr["target_object"]["position"]["row"]) * int(situation_repr["grid_size"])) +
                 int(situation_repr["target_object"]["position"]["column"]),
-                dtype=torch.long, device=device).unsqueeze(dim=0)
+                dtype=torch.long).unsqueeze(dim=0)
             self._input_lengths = np.append(self._input_lengths, [len(input_array)])
             self._target_lengths = np.append(self._target_lengths, [len(target_array)])
             self._examples = np.append(self._examples, [empty_example])
@@ -414,24 +481,21 @@ class ReaSCANDataset(object):
                 input_array = self.sentence_to_array(input_commands, vocabulary="input")
                 target_array = self.sentence_to_array(target_commands, vocabulary="target")
                 #equivalent_target_array = self.sentence_to_array(equivalent_target_commands, vocabulary="target")
-                empty_example["input_tensor"] = torch.tensor(input_array, dtype=torch.long, device=device).unsqueeze(
+                empty_example["input_tensor"] = torch.tensor(input_array, dtype=torch.long).unsqueeze(
                     dim=0)
-                empty_example["target_tensor"] = torch.tensor(target_array, dtype=torch.long, device=device).unsqueeze(
+                empty_example["target_tensor"] = torch.tensor(target_array, dtype=torch.long).unsqueeze(
                     dim=0)
-                #empty_example["equivalent_target_tensor"] = torch.tensor(equivalent_target_array, dtype=torch.long,
-                #                                                         device=device).unsqueeze(dim=0)
-                empty_example["situation_tensor"] = torch.tensor(situation_image, dtype=torch.float, device=device
-                                                                 ).unsqueeze(dim=0)
+                #empty_example["equivalent_target_tensor"] = torch.tensor(equivalent_target_array, dtype=torch.long).unsqueeze(dim=0)
+                empty_example["situation_tensor"] = torch.tensor(situation_image, dtype=torch.float).unsqueeze(dim=0)
                 empty_example["situation_representation"] = situation_repr
                 empty_example["derivation_representation"] = example["derivation_representation"]
                 empty_example["agent_position"] = torch.tensor(
                     (int(situation_repr["agent_position"]["row"]) * int(situation_repr["grid_size"])) +
-                    int(situation_repr["agent_position"]["column"]), dtype=torch.long,
-                    device=device).unsqueeze(dim=0)
+                    int(situation_repr["agent_position"]["column"]), dtype=torch.long).unsqueeze(dim=0)
                 empty_example["target_position"] = torch.tensor(
                     (int(situation_repr["target_object"]["position"]["row"]) * int(situation_repr["grid_size"])) +
                     int(situation_repr["target_object"]["position"]["column"]),
-                    dtype=torch.long, device=device).unsqueeze(dim=0)
+                    dtype=torch.long).unsqueeze(dim=0)
                 self._input_lengths = np.append(self._input_lengths, [len(input_array)])
                 self._target_lengths = np.append(self._target_lengths, [len(target_array)])
                 self._examples = np.append(self._examples, [empty_example])

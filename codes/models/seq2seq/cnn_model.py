@@ -1,22 +1,6 @@
 import torch
 import torch.nn as nn
 
-def isnotebook():
-    try:
-        shell = get_ipython().__class__.__name__
-        if shell == 'ZMQInteractiveShell':
-            return True   # Jupyter notebook or qtconsole
-        elif shell == 'TerminalInteractiveShell':
-            return False  # Terminal running IPython
-        else:
-            return False  # Other type (?)
-    except NameError:
-        return False      # Probably standard Python interpreter
-if isnotebook():
-    device = torch.device("cpu")
-else:
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
 class ConvolutionalNet(nn.Module):
     """Simple conv. net. Convolves the input channels but retains input image width."""
     def __init__(self, num_channels: int, cnn_kernel_size: int, num_conv_channels: int, dropout_probability: float,
