@@ -120,7 +120,7 @@ class Attention(nn.Module):
         # Project queries down to the correct dimension.
         # [bsz, 1, query_dimension] X [bsz, query_dimension, hidden_dim] = [bsz, 1, hidden_dim]
         queries = self.query_layer(queries)
-
+        
         # [bsz, 1, query_dim] X [bsz, query_dim, num_memory] = [bsz, num_memory, 1]
         scores = self.energy_layer(torch.tanh(queries + projected_keys))
         scores = scores.squeeze(2).unsqueeze(1)
@@ -133,6 +133,7 @@ class Attention(nn.Module):
         
         # Mask out keys that are on a padding location.encoded_commands
         mask = mask.unsqueeze(1)  # [batch_size, 1, num_memory]
+        
         scores = scores.masked_fill(mask == 0, float('-inf'))  # fill with large negative numbers
         attention_weights = F.softmax(scores, dim=2)  # [batch_size, 1, num_memory]
 
