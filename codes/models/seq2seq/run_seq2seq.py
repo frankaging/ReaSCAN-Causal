@@ -21,6 +21,18 @@ from seq2seq.ReaSCAN_dataset import *
 from seq2seq.helpers import *
 from torch.optim.lr_scheduler import LambdaLR
 
+def isnotebook():
+    try:
+        shell = get_ipython().__class__.__name__
+        if shell == 'ZMQInteractiveShell':
+            return True   # Jupyter notebook or qtconsole
+        elif shell == 'TerminalInteractiveShell':
+            return False  # Terminal running IPython
+        else:
+            return False  # Other type (?)
+    except NameError:
+        return False      # Probably standard Python interpreter
+
 
 # In[ ]:
 
@@ -32,7 +44,8 @@ def predict(
     pad_idx, 
     sos_idx,
     eos_idx, 
-    max_examples_to_evaluate
+    max_examples_to_evaluate,
+    device
 ) -> torch.Tensor:
     """
     Loop over all data in data_iterator and predict until <EOS> token is reached.
@@ -79,20 +92,20 @@ def predict(
         # in the evaluation phase, i think we can actually
         # use the model itself not the graphical model.
         # ENCODE
-        encoded_image = model.situation_encoder(
+        encoded_image = model.module.situation_encoder(
             input_images=situation
         )
-        hidden, encoder_outputs = model.encoder(
+        hidden, encoder_outputs = model.module.encoder(
             input_batch=input_sequence, 
             input_lengths=input_lengths,
         )
 
         # DECODER INIT
-        hidden = model.attention_decoder.initialize_hidden(
-            model.tanh(model.enc_hidden_to_dec_hidden(hidden)))
-        projected_keys_visual = model.visual_attention.key_layer(
+        hidden = model.module.attention_decoder.initialize_hidden(
+            model.module.tanh(model.module.enc_hidden_to_dec_hidden(hidden)))
+        projected_keys_visual = model.module.visual_attention.key_layer(
             encoded_image)  # [batch_size, situation_length, dec_hidden_dim]
-        projected_keys_textual = model.textual_attention.key_layer(
+        projected_keys_textual = model.module.textual_attention.key_layer(
             encoder_outputs["encoder_outputs"])  # [max_input_length, batch_size, dec_hidden_dim]
         # Iteratively decode the output.
         output_sequence = []
@@ -104,7 +117,7 @@ def predict(
         while token != eos_idx and decoding_iteration <= max_decoding_steps:
             
             (output, hidden, context_situation, attention_weights_command,
-             attention_weights_situation) = model.attention_decoder.forward_step(
+             attention_weights_situation) = model.module.attention_decoder.forward_step(
                 input_tokens=token, last_hidden=hidden, encoded_commands=projected_keys_textual,
                 commands_lengths=input_lengths, encoded_situations=projected_keys_visual
             )
@@ -121,7 +134,7 @@ def predict(
             output_sequence.pop()
             attention_weights_commands.pop()
             attention_weights_situations.pop()
-        if model.auxiliary_task:
+        if model.module.auxiliary_task:
             pass
         else:
             auxiliary_accuracy_agent, auxiliary_accuracy_target = 0, 0
@@ -143,14 +156,15 @@ def evaluate(
     pad_idx,
     sos_idx,
     eos_idx,
-    max_examples_to_evaluate
+    max_examples_to_evaluate,
+    device
 ):
     accuracies = []
     target_accuracies = []
     exact_match = 0
     for input_sequence, output_sequence, target_sequence, _, _, aux_acc_target in predict(
             data_iterator=data_iterator, model=model, max_decoding_steps=max_decoding_steps, pad_idx=pad_idx,
-            sos_idx=sos_idx, eos_idx=eos_idx, max_examples_to_evaluate=max_examples_to_evaluate):
+            sos_idx=sos_idx, eos_idx=eos_idx, max_examples_to_evaluate=max_examples_to_evaluate, device=device):
         accuracy = sequence_accuracy(output_sequence, target_sequence[0].tolist()[1:-1])
         if accuracy == 100:
             exact_match += 1
@@ -209,6 +223,9 @@ def train(
     np.random.seed(seed)
     
     from pathlib import Path
+    # the output directory name is generated on-the-fly.
+    run_name = f"seq2seq_seed_{seed}_max_itr_{max_training_iterations}"
+    output_directory = os.path.join(output_directory, run_name)
     logger.info(f"Create the output directory if not exist: {output_directory}")
     Path(output_directory).mkdir(parents=True, exist_ok=True)
     
@@ -332,6 +349,8 @@ def train(
             input_lengths_batch = input_lengths_batch.to(device)
             target_lengths_batch = target_lengths_batch.to(device)
             
+            print(device)
+            
             # Instead of calling forward(), we call the graph model wrapper.
             input_dict = {
                 "commands_input": input_batch, 
@@ -342,7 +361,7 @@ def train(
             }
             g_input_dict = GraphInput(input_dict, batched=True, batch_dim=0, cache_results=False)
             target_scores = g_model.compute(g_input_dict)
-            loss = model.get_loss(target_scores, target_batch)
+            loss = model.module.get_loss(target_scores, target_batch)
             if use_cuda and n_gpu > 1:
                 loss = loss.mean() # mean() to average on multi-gpu.
             # we need to average over actual length to get rid of padding losses.
@@ -358,11 +377,11 @@ def train(
             optimizer.step()
             scheduler.step()
             optimizer.zero_grad()
-            model.update_state(is_best=is_best)
+            model.module.update_state(is_best=is_best)
             
             # Print current metrics.
             if training_iteration % print_every == 0:
-                accuracy, exact_match = model.get_metrics(target_scores, target_batch)
+                accuracy, exact_match = model.module.get_metrics(target_scores, target_batch)
                 if auxiliary_task:
                     pass
                 else:
@@ -382,14 +401,16 @@ def train(
                         max_decoding_steps=max_decoding_steps, pad_idx=test_set.target_vocabulary.pad_idx,
                         sos_idx=test_set.target_vocabulary.sos_idx,
                         eos_idx=test_set.target_vocabulary.eos_idx,
-                        max_examples_to_evaluate=kwargs["max_testing_examples"])
+                        max_examples_to_evaluate=kwargs["max_testing_examples"],
+                        device=device
+                    )
                     logger.info("  Evaluation Accuracy: %5.2f Exact Match: %5.2f "
                                 " Target Accuracy: %5.2f" % (accuracy, exact_match, target_accuracy))
                     if exact_match > best_exact_match:
                         is_best = True
                         best_accuracy = accuracy
                         best_exact_match = exact_match
-                        model.update_state(accuracy=accuracy, exact_match=exact_match, is_best=is_best)
+                        model.module.update_state(accuracy=accuracy, exact_match=exact_match, is_best=is_best)
                     file_name = "checkpoint.pth.tar".format(str(training_iteration))
                     if is_best:
                         pass

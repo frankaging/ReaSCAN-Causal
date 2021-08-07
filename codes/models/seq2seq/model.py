@@ -14,22 +14,6 @@ from seq2seq.seq2seq_model import EncoderRNN
 from seq2seq.seq2seq_model import Attention
 from seq2seq.seq2seq_model import BahdanauAttentionDecoderRNN
 
-def isnotebook():
-    try:
-        shell = get_ipython().__class__.__name__
-        if shell == 'ZMQInteractiveShell':
-            return True   # Jupyter notebook or qtconsole
-        elif shell == 'TerminalInteractiveShell':
-            return False  # Terminal running IPython
-        else:
-            return False  # Other type (?)
-    except NameError:
-        return False      # Probably standard Python interpreter
-if isnotebook():
-    device = torch.device("cpu")
-else:
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
 logger = logging.getLogger(__name__)
 use_cuda = True if torch.cuda.is_available() else False
 
@@ -116,7 +100,7 @@ class Model(nn.Module):
         """Get rid of SOS-tokens in targets batch and append a padding token to each example in the batch."""
         batch_size, max_time = input_tensor.size()
         input_tensor = input_tensor[:, 1:]
-        output_tensor = torch.cat([input_tensor, torch.zeros(batch_size, device=device, dtype=torch.long).unsqueeze(
+        output_tensor = torch.cat([input_tensor, torch.zeros(batch_size, device=input_tensor.device, dtype=torch.long).unsqueeze(
             dim=1)], dim=1)
         return output_tensor
 

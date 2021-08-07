@@ -111,7 +111,7 @@ def generate_compute_graph(model,
     @GraphNode(situation_input_preparation, 
                cache_results=cache_results)
     def situation_encode(input_dict):
-        encoded_image = model.situation_encoder(
+        encoded_image = model.module.situation_encoder(
             input_images=input_dict["situations_input"]
         )
         return encoded_image
@@ -122,7 +122,8 @@ def generate_compute_graph(model,
     @GraphNode(command_input_preparation, 
                cache_results=cache_results)
     def command_input_encode(input_dict):
-        hidden, encoder_outputs = model.encoder(
+        print(input_dict["commands_input"].shape)
+        hidden, encoder_outputs = model.module.encoder(
             input_batch=input_dict["commands_input"], 
             input_lengths=input_dict["commands_lengths"],
         )
@@ -154,8 +155,8 @@ def generate_compute_graph(model,
         In this function, we want to abstract the C.
         """
         
-        initial_hidden = model.attention_decoder.initialize_hidden(
-            model.tanh(model.enc_hidden_to_dec_hidden(c_encode["command_hidden"])))
+        initial_hidden = model.module.attention_decoder.initialize_hidden(
+            model.module.tanh(model.module.enc_hidden_to_dec_hidden(c_encode["command_hidden"])))
         
         """
         Renaming.
@@ -184,9 +185,9 @@ def generate_compute_graph(model,
         # encoded_situations = encoded_situations.index_select(dim=0, index=perm_idx)
 
         # For efficiency
-        projected_keys_visual = model.visual_attention.key_layer(
+        projected_keys_visual = model.module.visual_attention.key_layer(
             encoded_situations)  # [batch_size, situation_length, dec_hidden_dim]
-        projected_keys_textual = model.textual_attention.key_layer(
+        projected_keys_textual = model.module.textual_attention.key_layer(
             encoded_commands)  # [max_input_length, batch_size, dec_hidden_dim]
         
         return {
@@ -205,7 +206,7 @@ def generate_compute_graph(model,
     Here, we set to a static bound of decoding steps.
     """
     for i in range(max_decode_step):
-        f = _generate_lstm_step_fxn(model.attention_decoder.forward_step, i)
+        f = _generate_lstm_step_fxn(model.module.attention_decoder.forward_step, i)
         hidden_layer = GraphNode(hidden_layer,
                                  name=f"lstm_step_{i}",
                                  forward=f, cache_results=cache_results)
@@ -223,7 +224,7 @@ def generate_compute_graph(model,
         context_situation = hidden_states["return_attention_weights"]
         decoder_output_batched = F.log_softmax(decoder_output_batched, dim=-1)
         
-        if model.auxiliary_task:
+        if model.module.auxiliary_task:
             pass # Not implemented yet.
         else:
             target_position_scores = torch.zeros(1), torch.zeros(1)

@@ -50,6 +50,8 @@ class EncoderRNN(nn.Module):
         meaning the whole sequence in both directions, whereas the output per time step represents different parts of
         the sequences (0:t for the forward LSTM, t:T for the backward LSTM).
         """
+        print("batch internal: ", input_batch.shape)
+        print("batch internal device: ", input_batch.device)
         assert input_batch.shape[0] == input_lengths.shape[0], "Wrong amount of lengths passed to .forward()"
         input_embeddings = self.embedding(input_batch)  # [batch_size, max_length, embedding_dim]
         input_embeddings = self.dropout(input_embeddings)  # [batch_size, max_length, embedding_dim]

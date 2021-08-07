@@ -6,22 +6,6 @@ import argparse
 
 logger = logging.getLogger(__name__)
 
-def isnotebook():
-    try:
-        shell = get_ipython().__class__.__name__
-        if shell == 'ZMQInteractiveShell':
-            return True   # Jupyter notebook or qtconsole
-        elif shell == 'TerminalInteractiveShell':
-            return False  # Terminal running IPython
-        else:
-            return False  # Other type (?)
-    except NameError:
-        return False      # Probably standard Python interpreter
-if isnotebook():
-    device = torch.device("cpu")
-else:
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
 def sequence_mask(sequence_lengths: torch.LongTensor, max_len=None) -> torch.tensor:
     """
     Create a sequence mask that masks out all indices larger than some sequence length as defined by
@@ -34,7 +18,7 @@ def sequence_mask(sequence_lengths: torch.LongTensor, max_len=None) -> torch.ten
     if max_len is None:
         max_len = sequence_lengths.data.max()
     batch_size = sequence_lengths.size(0)
-    sequence_range = torch.arange(0, max_len).long().to(device=device)
+    sequence_range = torch.arange(0, max_len).long().to(device=sequence_lengths.device)
 
     # [batch_size, max_len]
     sequence_range_expand = sequence_range.unsqueeze(0).expand(batch_size, max_len)
