@@ -113,7 +113,10 @@ def update_a():
     return f
 
 
-def get_counter_compgraph():
+def get_counter_compgraph(
+    max_decode_step,
+    cache_results=False
+):
     example = GraphNode.leaf(name=f"examples")
     fx = get_start_x_counter()
     fy = get_start_y_counter()
@@ -123,7 +126,7 @@ def get_counter_compgraph():
     y_counter = GraphNode(example, name="y0", forward=fy)
     o_counter = GraphNode(example, name="o0", forward=fo)
     action = GraphNode(x_counter,y_counter,o_counter, name="a0", forward=fa)
-    for i in range(1, 20):
+    for i in range(1, max_decode_step+1):
         fx = update_x()
         fy = update_y()
         fa = update_a()

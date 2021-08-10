@@ -16,11 +16,12 @@ def _generate_lstm_step_fxn(step_module, i):
     def _lstm_step_fxn(hidden_states):
         (output, hidden, context_situation, attention_weights_commands,
          attention_weights_situations) = step_module(
-            hidden_states["input_tokens_sorted"][:, i], 
-            hidden_states["hidden"], 
-            hidden_states["projected_keys_textual"], 
-            hidden_states["commands_lengths"], 
-            hidden_states["projected_keys_visual"],
+            lstm_input_tokens_sorted=hidden_states["input_tokens_sorted"][:, i], 
+            lstm_hidden=hidden_states["hidden"], 
+            lstm_projected_keys_textual=hidden_states["projected_keys_textual"], 
+            lstm_commands_lengths=hidden_states["commands_lengths"], 
+            lstm_projected_keys_visual=hidden_states["projected_keys_visual"],
+            tag="_lstm_step_fxn"
         )
         hidden_states["hidden"] = hidden
         hidden_states["return_lstm_output"] += [output.unsqueeze(0)]
@@ -75,10 +76,9 @@ def generate_compute_graph(model,
     def situation_input_preparation(
         situations_input,
     ):
-        input_dict = {
+        return {
             "situations_input": situations_input,
         }
-        return input_dict
         
     """
     Target Inputs
@@ -94,11 +94,10 @@ def generate_compute_graph(model,
     def target_sequence_input_preparation(
         target_batch, target_lengths
     ):
-        input_dict = {
+        return {
             "target_batch": target_batch,
             "target_lengths": target_lengths,
         }
-        return input_dict
     
     ####################
     #
@@ -111,10 +110,10 @@ def generate_compute_graph(model,
     @GraphNode(situation_input_preparation, 
                cache_results=cache_results)
     def situation_encode(input_dict):
-        encoded_image = model.module.situation_encoder(
-            input_images=input_dict["situations_input"]
+        return model(
+            situations_input=input_dict["situations_input"],
+            tag="situation_encode"
         )
-        return encoded_image
     
     """
     Language Encoding.
@@ -122,17 +121,11 @@ def generate_compute_graph(model,
     @GraphNode(command_input_preparation, 
                cache_results=cache_results)
     def command_input_encode(input_dict):
-        print(input_dict["commands_input"].shape)
-        hidden, encoder_outputs = model.module.encoder(
-            input_batch=input_dict["commands_input"], 
-            input_lengths=input_dict["commands_lengths"],
+        return model(
+            commands_input=input_dict["commands_input"], 
+            commands_lengths=input_dict["commands_lengths"],
+            tag="command_input_encode"
         )
-        output_dict = {
-            "command_hidden" : hidden,
-            "command_encoder_outputs" : encoder_outputs["encoder_outputs"],
-            "command_sequence_lengths" : encoder_outputs["sequence_lengths"],
-        }
-        return output_dict
     
     ####################
     #
@@ -146,67 +139,22 @@ def generate_compute_graph(model,
                target_sequence_input_preparation, 
                cache_results=cache_results)
     def decode_input_preparation(c_encode, s_encode, target_sequence):
-        """
-        The decoding step can be represented as:
-        h_T = f(h_T-1, C)
-        where h_i is the recurring hidden states, and C
-        is the static state representations.
-        
-        In this function, we want to abstract the C.
-        """
-        
-        initial_hidden = model.module.attention_decoder.initialize_hidden(
-            model.module.tanh(model.module.enc_hidden_to_dec_hidden(c_encode["command_hidden"])))
-        
-        """
-        Renaming.
-        """
-        input_tokens, input_lengths = target_sequence["target_batch"], target_sequence["target_lengths"]
-        init_hidden = initial_hidden
-        encoded_commands = c_encode["command_encoder_outputs"]
-        commands_lengths = c_encode["command_sequence_lengths"]
-        encoded_situations = s_encode
-        
-        """
-        Reshaping as well as getting the context-guided attention weights.
-        """
-        # Deprecated. We don't need to sort anymore.
-        # Sort the sequences by length in descending order
-        # batch_size, max_time = input_tokens.size()
-        # input_lengths = torch.tensor(input_lengths, dtype=torch.long, device=device)
-        # input_lengths, perm_idx = torch.sort(input_lengths, descending=True)
-        # input_tokens_sorted = input_tokens.index_select(dim=0, index=perm_idx)
-        # initial_h, initial_c = init_hidden
-        # hidden = (initial_h.index_select(dim=1, index=perm_idx),
-        #           initial_c.index_select(dim=1, index=perm_idx))
-        # encoded_commands = encoded_commands.index_select(dim=1, index=perm_idx)
-        # commands_lengths = torch.tensor(commands_lengths, device=device)
-        # commands_lengths = commands_lengths.index_select(dim=0, index=perm_idx)
-        # encoded_situations = encoded_situations.index_select(dim=0, index=perm_idx)
-
-        # For efficiency
-        projected_keys_visual = model.module.visual_attention.key_layer(
-            encoded_situations)  # [batch_size, situation_length, dec_hidden_dim]
-        projected_keys_textual = model.module.textual_attention.key_layer(
-            encoded_commands)  # [max_input_length, batch_size, dec_hidden_dim]
-        
-        return {
-            "return_lstm_output":[],
-            "return_attention_weights":[],
-            "hidden":init_hidden,
-            "input_tokens_sorted":input_tokens,
-            "projected_keys_textual":projected_keys_textual,
-            "commands_lengths":commands_lengths,
-            "projected_keys_visual":projected_keys_visual,
-            "seq_lengths":input_lengths,
-        }
+        return model(
+            target_batch=target_sequence["target_batch"],
+            target_lengths=target_sequence["target_lengths"],
+            command_hidden=c_encode["command_hidden"],
+            command_encoder_outputs=c_encode["command_encoder_outputs"],
+            command_sequence_lengths=c_encode["command_sequence_lengths"],
+            encoded_situations=s_encode,
+            tag="decode_input_preparation"
+        )
 
     hidden_layer = decode_input_preparation
     """
     Here, we set to a static bound of decoding steps.
     """
     for i in range(max_decode_step):
-        f = _generate_lstm_step_fxn(model.module.attention_decoder.forward_step, i)
+        f = _generate_lstm_step_fxn(model, i)
         hidden_layer = GraphNode(hidden_layer,
                                  name=f"lstm_step_{i}",
                                  forward=f, cache_results=cache_results)
@@ -224,7 +172,8 @@ def generate_compute_graph(model,
         context_situation = hidden_states["return_attention_weights"]
         decoder_output_batched = F.log_softmax(decoder_output_batched, dim=-1)
         
-        if model.module.auxiliary_task:
+        # if model.module.auxiliary_task:
+        if False:
             pass # Not implemented yet.
         else:
             target_position_scores = torch.zeros(1), torch.zeros(1)

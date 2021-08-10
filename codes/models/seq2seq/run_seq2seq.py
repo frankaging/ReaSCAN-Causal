@@ -92,21 +92,30 @@ def predict(
         # in the evaluation phase, i think we can actually
         # use the model itself not the graphical model.
         # ENCODE
-        encoded_image = model.module.situation_encoder(
-            input_images=situation
+        encoded_image = model(
+            situations_input=situation,
+            tag="situation_encode"
         )
-        hidden, encoder_outputs = model.module.encoder(
-            input_batch=input_sequence, 
-            input_lengths=input_lengths,
+        hidden, encoder_outputs = model(
+            commands_input=input_sequence, 
+            commands_lengths=input_lengths,
+            tag="command_input_encode_no_dict"
         )
 
         # DECODER INIT
-        hidden = model.module.attention_decoder.initialize_hidden(
-            model.module.tanh(model.module.enc_hidden_to_dec_hidden(hidden)))
-        projected_keys_visual = model.module.visual_attention.key_layer(
-            encoded_image)  # [batch_size, situation_length, dec_hidden_dim]
-        projected_keys_textual = model.module.textual_attention.key_layer(
-            encoder_outputs["encoder_outputs"])  # [max_input_length, batch_size, dec_hidden_dim]
+        hidden = model(
+            command_hidden=hidden,
+            tag="initialize_hidden"
+        )
+        projected_keys_visual = model(
+            encoded_situations=encoded_image,
+            tag="projected_keys_visual"
+        )
+        projected_keys_textual = model(
+            command_encoder_outputs=encoder_outputs["encoder_outputs"],
+            tag="projected_keys_textual"
+        )
+        
         # Iteratively decode the output.
         output_sequence = []
         contexts_situation = []
@@ -117,9 +126,13 @@ def predict(
         while token != eos_idx and decoding_iteration <= max_decoding_steps:
             
             (output, hidden, context_situation, attention_weights_command,
-             attention_weights_situation) = model.module.attention_decoder.forward_step(
-                input_tokens=token, last_hidden=hidden, encoded_commands=projected_keys_textual,
-                commands_lengths=input_lengths, encoded_situations=projected_keys_visual
+             attention_weights_situation) = model(
+                lstm_input_tokens_sorted=token,
+                lstm_hidden=hidden,
+                lstm_projected_keys_textual=projected_keys_textual,
+                lstm_commands_lengths=input_lengths,
+                lstm_projected_keys_visual=projected_keys_visual,
+                tag="_lstm_step_fxn"
             )
             output = F.log_softmax(output, dim=-1)
             token = output.max(dim=-1)[1]
@@ -134,7 +147,7 @@ def predict(
             output_sequence.pop()
             attention_weights_commands.pop()
             attention_weights_situations.pop()
-        if model.module.auxiliary_task:
+        if model(tag="auxiliary_task"):
             pass
         else:
             auxiliary_accuracy_agent, auxiliary_accuracy_target = 0, 0
@@ -349,8 +362,6 @@ def train(
             input_lengths_batch = input_lengths_batch.to(device)
             target_lengths_batch = target_lengths_batch.to(device)
             
-            print(device)
-            
             # Instead of calling forward(), we call the graph model wrapper.
             input_dict = {
                 "commands_input": input_batch, 
@@ -361,11 +372,15 @@ def train(
             }
             g_input_dict = GraphInput(input_dict, batched=True, batch_dim=0, cache_results=False)
             target_scores = g_model.compute(g_input_dict)
-            loss = model.module.get_loss(target_scores, target_batch)
+            loss = model(
+                loss_target_scores=target_scores, 
+                loss_target_batch=target_batch,
+                tag="loss"
+            )
             if use_cuda and n_gpu > 1:
                 loss = loss.mean() # mean() to average on multi-gpu.
             # we need to average over actual length to get rid of padding losses.
-            loss /= target_lengths_batch.sum()
+            # loss /= target_lengths_batch.sum()
             if auxiliary_task:
                 target_loss = 0
                 pass
@@ -377,11 +392,18 @@ def train(
             optimizer.step()
             scheduler.step()
             optimizer.zero_grad()
-            model.module.update_state(is_best=is_best)
+            model(
+                is_best=is_best,
+                tag="update_state"
+            )
             
             # Print current metrics.
             if training_iteration % print_every == 0:
-                accuracy, exact_match = model.module.get_metrics(target_scores, target_batch)
+                accuracy, exact_match = model(
+                    loss_target_scores=target_scores, 
+                    loss_target_batch=target_batch,
+                    tag="get_metrics"
+                )
                 if auxiliary_task:
                     pass
                 else:
@@ -410,7 +432,11 @@ def train(
                         is_best = True
                         best_accuracy = accuracy
                         best_exact_match = exact_match
-                        model.module.update_state(accuracy=accuracy, exact_match=exact_match, is_best=is_best)
+                        model(
+                            accuracy=accuracy, exact_match=exact_match, 
+                            is_best=is_best,
+                            tag="update_state"
+                        )
                     file_name = "checkpoint.pth.tar".format(str(training_iteration))
                     if is_best:
                         pass

@@ -50,8 +50,6 @@ class EncoderRNN(nn.Module):
         meaning the whole sequence in both directions, whereas the output per time step represents different parts of
         the sequences (0:t for the forward LSTM, t:T for the backward LSTM).
         """
-        print("batch internal: ", input_batch.shape)
-        print("batch internal device: ", input_batch.device)
         assert input_batch.shape[0] == input_lengths.shape[0], "Wrong amount of lengths passed to .forward()"
         input_embeddings = self.embedding(input_batch)  # [batch_size, max_length, embedding_dim]
         input_embeddings = self.dropout(input_embeddings)  # [batch_size, max_length, embedding_dim]
@@ -128,6 +126,9 @@ class Attention(nn.Module):
         scores = scores.squeeze(2).unsqueeze(1)
         
         max_len = max(memory_lengths)[0].tolist()
+        # we need to check if the batch recieved in this device is actually smaller.
+        if max_len < scores.shape[-1]:
+            max_len = scores.shape[-1] # we need to avoid errors
         sequence_range = torch.arange(0, max_len).long().to(device=queries.device)
         sequence_range_expand = sequence_range.unsqueeze(0).expand(batch_size, max_len)
         seq_length_expand = (memory_lengths.expand_as(sequence_range_expand))
@@ -135,7 +136,6 @@ class Attention(nn.Module):
         
         # Mask out keys that are on a padding location.encoded_commands
         mask = mask.unsqueeze(1)  # [batch_size, 1, num_memory]
-        
         scores = scores.masked_fill(mask == 0, float('-inf'))  # fill with large negative numbers
         attention_weights = F.softmax(scores, dim=2)  # [batch_size, 1, num_memory]
 
@@ -195,6 +195,8 @@ class BahdanauAttentionDecoderRNN(nn.Module):
           attention_weights : attention weights, [batch_size, 1, max_input_length]
         """
         last_hidden, last_cell = last_hidden
+        last_hidden = last_hidden.transpose(0, 1)
+        last_cell = last_cell.transpose(0, 1)
 
         # Embed each input symbol
         embedded_input = self.embedding(input_tokens)  # [batch_size, hidden_size]
@@ -234,6 +236,10 @@ class BahdanauAttentionDecoderRNN(nn.Module):
         # hidden: tuple of each [num_layers, batch_size, hidden_size] (pair for hidden and cell)
         # output = self.hidden_to_output(lstm_output)  # [batch_size, output_size]
         # output = output.squeeze(dim=0)
+        curr_hidden, curr_cell = hidden
+        curr_hidden = curr_hidden.transpose(0, 1)
+        curr_cell = curr_cell.transpose(0, 1)
+        hidden = (curr_hidden, curr_cell)
 
         # Concatenate all outputs and project to output size.
         pre_output = torch.cat([embedded_input.transpose(0, 1), lstm_output,
@@ -319,7 +325,7 @@ class BahdanauAttentionDecoderRNN(nn.Module):
         encoder_message = encoder_message.unsqueeze(0)  # [1, batch_size, hidden_size]
         encoder_message = encoder_message.expand(self.num_layers, -1,
                                                  -1).contiguous()  # [num_layers, batch_size, hidden_size]
-        return encoder_message.clone(), encoder_message.clone()
+        return encoder_message.clone().transpose(0,1), encoder_message.clone().transpose(0,1)
 
     def extra_repr(self) -> str:
         return "AttentionDecoderRNN\n num_layers={}\n hidden_size={}\n dropout={}\n num_output_symbols={}\n".format(

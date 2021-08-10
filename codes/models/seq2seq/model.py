@@ -194,20 +194,147 @@ class Model(nn.Module):
         decoder_output_batched = F.log_softmax(decoder_output_batched, dim=-1)
         return decoder_output_batched, context_situation
 
-    def forward(self, commands_input: torch.LongTensor, commands_lengths: List[int], situations_input: torch.Tensor,
-                target_batch: torch.LongTensor, target_lengths: List[int]) -> Tuple[torch.Tensor, torch.Tensor]:
-        encoder_output = self.encode_input(commands_input=commands_input, commands_lengths=commands_lengths,
-                                           situations_input=situations_input)
-        decoder_output, context_situation = self.decode_input_batched(
-            target_batch=target_batch, target_lengths=target_lengths, initial_hidden=encoder_output["hidden_states"],
-            encoded_commands=encoder_output["encoded_commands"]["encoder_outputs"], command_lengths=commands_lengths,
-            encoded_situations=encoder_output["encoded_situations"])
-        if self.auxiliary_task:
-            target_position_scores = self.auxiliary_task_forward(context_situation)
+    def forward(self, 
+                # raw inputs
+                commands_input=None, 
+                commands_lengths=None, 
+                situations_input=None,
+                target_batch=None,
+                target_lengths=None,
+                # intermediate layers
+                command_hidden=None,
+                command_encoder_outputs=None,
+                command_sequence_lengths=None,
+                encoded_situations=None,
+                # recurrent layers
+                lstm_input_tokens_sorted=None,
+                lstm_hidden=None,
+                lstm_projected_keys_textual=None,
+                lstm_commands_lengths=None,
+                lstm_projected_keys_visual=None,
+                # loss
+                loss_target_scores=None,
+                loss_target_batch=None,
+                # others
+                is_best=None,
+                accuracy=None,
+                exact_match=None,
+                tag="default",
+               ):
+        if tag == "situation_encode":
+            return self.situation_encoder(situations_input)
+        elif tag == "command_input_encode_no_dict":
+            return self.encoder(
+                input_batch=commands_input, 
+                input_lengths=commands_lengths,
+            )
+        elif tag == "command_input_encode":
+            hidden, encoder_outputs = self.encoder(
+                input_batch=commands_input, 
+                input_lengths=commands_lengths,
+            )
+            return {
+                "command_hidden" : hidden,
+                "command_encoder_outputs" : encoder_outputs["encoder_outputs"],
+                "command_sequence_lengths" : encoder_outputs["sequence_lengths"],
+            }
+        elif tag == "decode_input_preparation":
+            """
+            The decoding step can be represented as:
+            h_T = f(h_T-1, C)
+            where h_i is the recurring hidden states, and C
+            is the static state representations.
+
+            In this function, we want to abstract the C.
+            """
+            # this step cannot be distributed as the init state is shared across GPUs.
+            initial_hidden = self.attention_decoder.initialize_hidden(
+                self.tanh(self.enc_hidden_to_dec_hidden(command_hidden)))
+            """
+            Renaming.
+            """
+            input_tokens, input_lengths = target_batch, target_lengths
+            init_hidden = initial_hidden
+            encoded_commands = command_encoder_outputs
+            commands_lengths = command_sequence_lengths
+
+            """
+            Reshaping as well as getting the context-guided attention weights.
+            """
+            # Deprecated. We don't need to sort anymore.
+            # Sort the sequences by length in descending order
+            # batch_size, max_time = input_tokens.size()
+            # input_lengths = torch.tensor(input_lengths, dtype=torch.long, device=device)
+            # input_lengths, perm_idx = torch.sort(input_lengths, descending=True)
+            # input_tokens_sorted = input_tokens.index_select(dim=0, index=perm_idx)
+            # initial_h, initial_c = init_hidden
+            # hidden = (initial_h.index_select(dim=1, index=perm_idx),
+            #           initial_c.index_select(dim=1, index=perm_idx))
+            # encoded_commands = encoded_commands.index_select(dim=1, index=perm_idx)
+            # commands_lengths = torch.tensor(commands_lengths, device=device)
+            # commands_lengths = commands_lengths.index_select(dim=0, index=perm_idx)
+            # encoded_situations = encoded_situations.index_select(dim=0, index=perm_idx)
+
+            # For efficiency
+            projected_keys_visual = self.visual_attention.key_layer(
+                encoded_situations)  # [batch_size, situation_length, dec_hidden_dim]
+            projected_keys_textual = self.textual_attention.key_layer(
+                encoded_commands)  # [max_input_length, batch_size, dec_hidden_dim]
+
+            return {
+                "return_lstm_output":[],
+                "return_attention_weights":[],
+                "hidden":init_hidden,
+                "input_tokens_sorted":input_tokens,
+                "projected_keys_textual":projected_keys_textual,
+                "commands_lengths":commands_lengths,
+                "projected_keys_visual":projected_keys_visual,
+                "seq_lengths":input_lengths,
+            }
+        elif tag == "initialize_hidden":
+            return self.attention_decoder.initialize_hidden(
+                self.tanh(self.enc_hidden_to_dec_hidden(command_hidden)))
+        elif tag == "projected_keys_visual":
+            return self.visual_attention.key_layer(
+                encoded_situations
+            )  # [batch_size, situation_length, dec_hidden_dim]
+        elif tag == "projected_keys_textual":
+            return self.textual_attention.key_layer(
+                command_encoder_outputs
+            )  # [max_input_length, batch_size, dec_hidden_dim]
+        elif tag == "_lstm_step_fxn":
+            return self.attention_decoder.forward_step(
+                lstm_input_tokens_sorted,
+                lstm_hidden,
+                lstm_projected_keys_textual,
+                lstm_commands_lengths,
+                lstm_projected_keys_visual,
+            )
+        elif tag == "loss":
+            return self.get_loss(loss_target_scores, loss_target_batch)
+        elif tag == "update_state":
+            return self.update_state(
+                is_best=is_best, accuracy=accuracy, exact_match=exact_match,
+            )
+        elif tag == "get_metrics":
+            return self.get_metrics(
+                loss_target_scores, loss_target_batch
+            )
+        elif tag == "auxiliary_task":
+            return False
         else:
-            target_position_scores = torch.zeros(1), torch.zeros(1)
-        return (decoder_output.transpose(0, 1),  # [batch_size, max_target_seq_length, target_vocabulary_size]
-                target_position_scores)
+            encoder_output = self.encode_input(commands_input=commands_input, commands_lengths=commands_lengths,
+                                               situations_input=situations_input)
+            decoder_output, context_situation = self.decode_input_batched(
+                target_batch=target_batch, target_lengths=target_lengths, initial_hidden=encoder_output["hidden_states"],
+                encoded_commands=encoder_output["encoded_commands"]["encoder_outputs"], command_lengths=commands_lengths,
+                encoded_situations=encoder_output["encoded_situations"])
+            if self.auxiliary_task:
+                target_position_scores = self.auxiliary_task_forward(context_situation)
+            else:
+                target_position_scores = torch.zeros(1), torch.zeros(1)
+            return (decoder_output.transpose(0, 1),  # [batch_size, max_target_seq_length, target_vocabulary_size]
+                    target_position_scores)
 
     def update_state(self, is_best: bool, accuracy=None, exact_match=None) -> {}:
         self.trained_iterations += 1
