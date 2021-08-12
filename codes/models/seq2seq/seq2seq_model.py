@@ -248,8 +248,7 @@ class BahdanauAttentionDecoderRNN(nn.Module):
         output = self.hidden_to_output(pre_output)  # [batch_size, 1, output_size]
         output = output.squeeze(dim=1)   # [batch_size, output_size]
         
-        return (output, hidden, attention_weights_situations.squeeze(dim=1), attention_weights_commands,
-                attention_weights_situations)
+        return (output, hidden)
         # output : [un-normalized probabilities] [batch_size, output_size]
         # hidden: tuple of size [num_layers, batch_size, hidden_size] (for hidden and cell)
         # attention_weights: [batch_size, max_input_length]

@@ -288,6 +288,90 @@ class ReaSCANDataset(object):
         max_target_length = np.max(target_lengths)
         return max_target_length
     
+    def get_dual_dataset(self):
+        """
+        Function for getting dual dataset for
+        counterfactual training.
+        """
+        examples = self._examples
+        
+        # get length.
+        input_lengths = self._input_lengths
+        target_lengths = self._target_lengths
+        max_input_length = np.max(input_lengths)
+        max_target_length = np.max(target_lengths)
+        
+        # return structs
+        input_batch = []
+        target_batch = []
+        situation_batch = []
+        situation_representation_batch = []
+        derivation_representation_batch = []
+        agent_positions_batch = []
+        target_positions_batch = []
+
+        for example in examples:
+            to_pad_input = max_input_length - example["input_tensor"].size(1)
+            to_pad_target = max_target_length - example["target_tensor"].size(1)
+            padded_input = torch.cat([
+                example["input_tensor"],
+                torch.zeros(int(to_pad_input), dtype=torch.long).unsqueeze(0)], dim=1)
+            # padded_input = torch.cat([
+            #     torch.zeros_like(example["input_tensor"], dtype=torch.long),
+            #     torch.zeros(int(to_pad_input), dtype=torch.long).unsqueeze(0)], dim=1) # TODO: change back
+            padded_target = torch.cat([
+                example["target_tensor"],
+                torch.zeros(int(to_pad_target), dtype=torch.long).unsqueeze(0)], dim=1)
+            input_batch.append(padded_input)
+            target_batch.append(padded_target)
+            situation_batch.append(example["situation_tensor"])
+            situation_representation_batch.append(example["situation_representation"])
+            derivation_representation_batch.append(example["derivation_representation"])
+            agent_positions_batch.append(example["agent_position"])
+            target_positions_batch.append(example["target_position"])
+        
+        # Main dataset.
+        main_input_batch = torch.cat(input_batch, dim=0)
+        main_target_batch = torch.cat(target_batch, dim=0)
+        main_situation_batch = torch.cat(situation_batch, dim=0)
+        main_agent_positions_batch = torch.cat(agent_positions_batch, dim=0)
+        main_target_positions_batch = torch.cat(target_positions_batch, dim=0)
+        main_input_lengths_batch = torch.tensor([[l] for l in input_lengths], dtype=torch.long)
+        main_target_lengths_batch = torch.tensor([[l] for l in target_lengths], dtype=torch.long)
+        
+        # Dual dataset for counterfactual training.
+        dual_input_batch = torch.cat(input_batch, dim=0)
+        dual_target_batch = torch.cat(target_batch, dim=0)
+        dual_situation_batch = torch.cat(situation_batch, dim=0)
+        dual_agent_positions_batch = torch.cat(agent_positions_batch, dim=0)
+        dual_target_positions_batch = torch.cat(target_positions_batch, dim=0)
+        dual_input_lengths_batch = torch.tensor([[l] for l in input_lengths], dtype=torch.long)
+        dual_target_lengths_batch = torch.tensor([[l] for l in target_lengths], dtype=torch.long)
+        # Randomly shifting the dataset.
+        # Later, we may need to have more complicated sampling strategies for
+        # getting the dual dataset for counterfactual training.
+        perm_idx = torch.randperm(dual_input_batch.size()[0])
+        dual_input_batch = dual_input_batch.index_select(dim=0, index=perm_idx)
+        dual_target_batch = dual_target_batch.index_select(dim=0, index=perm_idx)
+        dual_situation_batch = dual_situation_batch.index_select(dim=0, index=perm_idx)
+        dual_agent_positions_batch = dual_agent_positions_batch.index_select(dim=0, index=perm_idx)
+        dual_target_positions_batch = dual_target_positions_batch.index_select(dim=0, index=perm_idx)
+        dual_input_lengths_batch = dual_input_lengths_batch.index_select(dim=0, index=perm_idx)
+        dual_target_lengths_batch = dual_target_lengths_batch.index_select(dim=0, index=perm_idx)
+        
+        main_dataset = TensorDataset(
+            # main dataset
+            main_input_batch, main_target_batch, main_situation_batch, main_agent_positions_batch, 
+            main_target_positions_batch, main_input_lengths_batch, main_target_lengths_batch,
+            # dual dataset
+            dual_input_batch, dual_target_batch, dual_situation_batch, dual_agent_positions_batch,
+            dual_target_positions_batch, dual_input_lengths_batch, dual_target_lengths_batch
+        )
+
+        # with non-tensorized outputs
+        return main_dataset, (situation_representation_batch, derivation_representation_batch)
+        # the last two items are deprecated. we need to fix them to make them usable.
+    
     def get_dataset(self):
         examples = self._examples
         

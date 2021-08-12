@@ -146,7 +146,7 @@ def arg_parse():
     parser.add_argument("--seed", type=int, default=42)
     
     # Counterfactual arguments
-    
+    parser.add_argument("--cf_mode", type=str, default="random", help="What mode are you in for your counterfactual training.")
     
     try:
         get_ipython().run_line_magic('matplotlib', 'inline')
