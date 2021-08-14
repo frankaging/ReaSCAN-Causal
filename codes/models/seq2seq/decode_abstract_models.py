@@ -4,6 +4,7 @@ sys.path.append(os.path.join(os.path.dirname("__file__"), '..'))
 
 from antra.antra import *
 import json
+import torch
 
 def index2corrdinates(index:int, 
                       grid_size=6):

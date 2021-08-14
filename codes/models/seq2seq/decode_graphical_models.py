@@ -32,35 +32,36 @@ def _generate_lstm_step_fxn_cf(step_module, i, max_decode_step,
     """
 
     def _lstm_step_fxn(hidden_states):
-        if isnotebook():
-            
-            last_states = hidden_states
-            batch_size = last_states.size(0)
+        last_states = hidden_states
+        batch_size = last_states.size(0)
 
-            last_hidden = last_states[:,:hidden_dim].unsqueeze(dim=1).contiguous()
-            last_cell = last_states[:,hidden_dim:hidden_dim*2].unsqueeze(dim=1).contiguous()
-            input_tokens_sorted = last_states[:,hidden_dim*2:hidden_dim*2+max_decode_step].long().contiguous()
-            
-            commands_lengths = last_states[
-                :,hidden_dim*2+max_decode_step:hidden_dim*2+max_decode_step+1
-            ].long().contiguous()
-            
-            projected_keys_visual = last_states[
-                :,hidden_dim*2+max_decode_step+1:hidden_dim*2+max_decode_step+1+image_size*image_size*hidden_dim
-            ].reshape(
-                batch_size, image_size*image_size, hidden_dim
-            ).contiguous()
-            
-            _output = last_states[
-                :,hidden_dim*2+max_decode_step+1+image_size*image_size*hidden_dim:hidden_dim*2+max_decode_step+1+image_size*image_size*hidden_dim+vocab_size
-            ].contiguous()
-            
-            projected_keys_textual = last_states[
-                :,hidden_dim*2+max_decode_step+1+image_size*image_size*hidden_dim+vocab_size:
-            ].reshape(
-                batch_size, -1, hidden_dim
-            ).contiguous()
-            
+        last_hidden = last_states[:,:hidden_dim].unsqueeze(dim=1).contiguous()
+        last_cell = last_states[:,hidden_dim:hidden_dim*2].unsqueeze(dim=1).contiguous()
+        input_tokens_sorted = last_states[:,hidden_dim*2:hidden_dim*2+max_decode_step].long().contiguous()
+
+        commands_lengths = last_states[
+            :,hidden_dim*2+max_decode_step:hidden_dim*2+max_decode_step+1
+        ].long().contiguous()
+
+        projected_keys_visual = last_states[
+            :,hidden_dim*2+max_decode_step+1:hidden_dim*2+max_decode_step+1+image_size*image_size*hidden_dim
+        ].reshape(
+            batch_size, image_size*image_size, hidden_dim
+        ).contiguous()
+
+        output_s = hidden_dim*2+max_decode_step+1+image_size*image_size*hidden_dim
+        output_e = hidden_dim*2+max_decode_step+1+image_size*image_size*hidden_dim+vocab_size*(i+1)
+        prev_output = last_states[
+            :,output_s:output_e
+        ].contiguous()
+
+        projected_keys_textual = last_states[
+            :,output_e:
+        ].reshape(
+            batch_size, -1, hidden_dim
+        ).contiguous()
+
+        if isnotebook():
             (output, hidden) = step_module.forward(
                 lstm_input_tokens_sorted=input_tokens_sorted[:, i], 
                 lstm_hidden=(last_hidden, last_cell), 
@@ -71,13 +72,14 @@ def _generate_lstm_step_fxn_cf(step_module, i, max_decode_step,
             )
         else:
             (output, hidden) = step_module(
-                lstm_input_tokens_sorted=hidden_states["input_tokens_sorted"][:, i], 
-                lstm_hidden=hidden_states["hidden"], 
-                lstm_projected_keys_textual=hidden_states["projected_keys_textual"], 
-                lstm_commands_lengths=hidden_states["commands_lengths"], 
-                lstm_projected_keys_visual=hidden_states["projected_keys_visual"],
+                lstm_input_tokens_sorted=input_tokens_sorted[:, i], 
+                lstm_hidden=(last_hidden, last_cell), 
+                lstm_projected_keys_textual=projected_keys_textual, 
+                lstm_commands_lengths=commands_lengths, 
+                lstm_projected_keys_visual=projected_keys_visual,
                 tag="_lstm_step_fxn"
             )
+        # maybe, let us use the softmax output!
         
         last_states = torch.cat(
                 [
@@ -86,6 +88,8 @@ def _generate_lstm_step_fxn_cf(step_module, i, max_decode_step,
                     input_tokens_sorted,
                     commands_lengths,
                     projected_keys_visual.reshape(batch_size, -1),
+                    # save all output!
+                    prev_output,
                     output,
                     projected_keys_textual.reshape(batch_size, -1),
                 ], dim=-1
@@ -249,7 +253,7 @@ def generate_compute_graph_cf(
                     hidden_states["input_tokens_sorted"],
                     hidden_states["commands_lengths"],
                     hidden_states["projected_keys_visual"].reshape(batch_size, -1),
-                    torch.zeros(batch_size, vocab_size),
+                    torch.zeros(batch_size, vocab_size).to(hidden_states["input_tokens_sorted"].device),
                     # we need the textual key to be at last since the dimension is not interpretable.
                     hidden_states["projected_keys_textual"].reshape(batch_size, -1)
                 ], dim=-1

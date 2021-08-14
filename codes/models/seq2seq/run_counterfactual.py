@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[10]:
+# In[1]:
 
 
 import argparse
@@ -16,6 +16,7 @@ import sys
 sys.path.append(os.path.join(os.path.dirname("__file__"), '..'))
 import time
 import random
+import torch.nn.functional as F
 
 from decode_graphical_models import *
 from decode_abstract_models import *
@@ -36,7 +37,7 @@ def isnotebook():
         return False      # Probably standard Python interpreter
 
 
-# In[ ]:
+# In[2]:
 
 
 def predict(
@@ -127,8 +128,7 @@ def predict(
         attention_weights_situations = []
         while token != eos_idx and decoding_iteration <= max_decoding_steps:
             
-            (output, hidden, context_situation, attention_weights_command,
-             attention_weights_situation) = model(
+            (output, hidden) = model(
                 lstm_input_tokens_sorted=token,
                 lstm_hidden=hidden,
                 lstm_projected_keys_textual=projected_keys_textual,
@@ -140,28 +140,22 @@ def predict(
             token = output.max(dim=-1)[1]
 
             output_sequence.append(token.data[0].item())
-            attention_weights_commands.append(attention_weights_command.tolist())
-            attention_weights_situations.append(attention_weights_situation.tolist())
-            contexts_situation.append(context_situation.unsqueeze(1))
             decoding_iteration += 1
 
         if output_sequence[-1] == eos_idx:
             output_sequence.pop()
-            attention_weights_commands.pop()
-            attention_weights_situations.pop()
         if model(tag="auxiliary_task"):
             pass
         else:
             auxiliary_accuracy_agent, auxiliary_accuracy_target = 0, 0
-        yield (input_sequence, output_sequence, target_sequence,
-               attention_weights_commands, attention_weights_situations, auxiliary_accuracy_target)
+        yield (input_sequence, output_sequence, target_sequence, auxiliary_accuracy_target)
 
     elapsed_time = time.time() - start_time
     logging.info("Predicted for {} examples.".format(i))
     logging.info("Done predicting in {} seconds.".format(elapsed_time))
 
 
-# In[ ]:
+# In[3]:
 
 
 def evaluate(
@@ -177,7 +171,7 @@ def evaluate(
     accuracies = []
     target_accuracies = []
     exact_match = 0
-    for input_sequence, output_sequence, target_sequence, _, _, aux_acc_target in predict(
+    for input_sequence, output_sequence, target_sequence, aux_acc_target in predict(
             data_iterator=data_iterator, model=model, max_decoding_steps=max_decoding_steps, pad_idx=pad_idx,
             sos_idx=sos_idx, eos_idx=eos_idx, max_examples_to_evaluate=max_examples_to_evaluate, device=device):
         accuracy = sequence_accuracy(output_sequence, target_sequence[0].tolist()[1:-1])
@@ -189,7 +183,7 @@ def evaluate(
             float(np.mean(np.array(target_accuracies))))
 
 
-# In[ ]:
+# In[4]:
 
 
 def train(
@@ -367,6 +361,10 @@ def train(
     
     logger.info("Training starts..")
     training_iteration = start_iteration
+    cf_loss_weight = 0.5
+    checkpoint_save_every = 10000
+    cf_sample_per_batch = 10
+    logger.info(f"Setting cf_sample_per_batch = {cf_sample_per_batch}")
     while training_iteration < max_training_iterations:
 
         # Shuffle the dataset and loop over it.
@@ -377,54 +375,101 @@ def train(
             is_best = False
             model.train()
             
+            # what to intervene
+            """
+            For the sake of quick training, for a single batch,
+            we select the same attribute to intervenen on:
+            0: x
+            1: y
+            2: orientation
+            """
+            intervene_attribute = random.choice([0,1,2])
+            input_max_seq_lens = max(input_lengths_batch)[0]
+            target_max_seq_lens = max(target_lengths_batch)[0]
             #####################
             #
             # high data start
             #
             #####################
-            ## main
-            main_high = {
-                "agent_positions_batch": agent_positions_batch.unsqueeze(dim=-1),
-                "target_positions_batch": target_positions_batch.unsqueeze(dim=-1),
-            }
-            g_main_high = GraphInput(main_high, batched=True, batch_dim=0, cache_results=False)
             
-            ## dual
-            dual_high = {
-                "agent_positions_batch": dual_agent_positions_batch.unsqueeze(dim=-1),
-                "target_positions_batch": dual_target_positions_batch.unsqueeze(dim=-1),
-            }
-            g_dual_high = GraphInput(dual_high, batched=True, batch_dim=0, cache_results=False)
+            # to have high quality high data, we need to iterate through each example.
+            batch_size = agent_positions_batch.size(0)
+            intervened_target_batch = []
+            intervened_target_lengths_batch = []
+            high_intervene_time = []
+            for i in range(batch_size):
+                ## main
+                main_high = {
+                    "agent_positions_batch": agent_positions_batch[i:i+1].unsqueeze(dim=-1),
+                    "target_positions_batch": target_positions_batch[i:i+1].unsqueeze(dim=-1),
+                }
+                g_main_high = GraphInput(main_high, batched=True, batch_dim=0, cache_results=False)
+                ## dual
+                dual_high = {
+                    "agent_positions_batch": dual_agent_positions_batch[i:i+1].unsqueeze(dim=-1),
+                    "target_positions_batch": dual_target_positions_batch[i:i+1].unsqueeze(dim=-1),
+                }
+                g_dual_high = GraphInput(dual_high, batched=True, batch_dim=0, cache_results=False)
+                dual_target_length = dual_target_lengths_batch[i][0].tolist()
+                intervene_time = random.randint(1, dual_target_length-1) # we get rid of SOS and EOS tokens
+                high_intervene_time += [intervene_time]
+                # get the duel high state
+                main_high_hidden = hi_model.compute_node(f"s{intervene_time}", g_main_high)
+                dual_high_hidden = hi_model.compute_node(f"s{intervene_time}", g_dual_high)
+                # only intervene on an selected attribute.
+                main_high_hidden[:,intervene_attribute] = dual_high_hidden[:,intervene_attribute]
+                high_interv = Intervention(
+                    g_main_high, {f"s{intervene_time}": main_high_hidden}, 
+                    cache_results=False,
+                    cache_base_results=False,
+                    batched=True
+                )
+                intervened_outputs = []
+                for i in range(0, train_max_decoding_steps-2): # we only have this many steps can intervened.
+                    _, intervened_output = hi_model.intervene_node(f"s{i+1}", high_interv)
+                    if intervened_output[0,3] == 0 or i == train_max_decoding_steps-3:
+                        # we need to record the length and early stop
+                        intervened_outputs = [1] + intervened_outputs + [2]
+                        intervened_outputs = torch.tensor(intervened_outputs).long()
+                        intervened_length = len(intervened_outputs)
+                        # we need to confine the longest length!
+                        if intervened_length > train_max_decoding_steps:
+                            intervened_length = train_max_decoding_steps
+                            intervened_outputs = intervened_outputs[:train_max_decoding_steps]
+                        intervened_target_batch += [intervened_outputs]
+                        intervened_target_lengths_batch += [intervened_length]
+                        break
+                    else:
+                        intervened_outputs.append(intervened_output[0,3].tolist())
             
-            # high level model intervene
-            input_min_seq_lens = min(input_lengths_batch)[0]
-            target_min_seq_lens = min(target_lengths_batch)[0]
-            # randomly pick a time point to do the intervention
-            intervene_time = random.randint(0, target_min_seq_lens-1)
-            # get the duel high state
-            # dual_high_hidden = G.compute_node(f"s{intervene_time}", g_dual_high)
-            # high_interv = Intervention(
-            #     hi1, {f"s{intervene_time}": torch.tensor([[1, 3, 0, 4], [1, -1, 0, 3]])}, 
-            #     cache_results=False,
-            #     cache_base_results=False,
-            #     batched=True
-            # )
+            for i in range(batch_size):
+                # we need to pad to the longest ones.
+                intervened_target_batch[i] = torch.cat([
+                    intervened_target_batch[i],
+                    torch.zeros(int(train_max_decoding_steps-intervened_target_lengths_batch[i]), dtype=torch.long)], dim=0
+                )
+            intervened_target_lengths_batch = torch.tensor(intervened_target_lengths_batch).long().unsqueeze(dim=-1)
+            intervened_target_batch = torch.stack(intervened_target_batch, dim=0)
+            # we need to truncate if this is longer than the maximum target length
+            # of original target length.
             
             #####################
             #
             # high data end
             #
             #####################
-            
 
+            
             #####################
             #
             # low data start
             #
             #####################
             ## main
-            input_max_seq_lens = max(input_lengths_batch)[0]
-            target_max_seq_lens = max(target_lengths_batch)[0]
+            """
+            Low level data requires GPU forwarding.
+            """
+            
             input_batch = input_batch.to(device)
             target_batch = target_batch.to(device)
             situation_batch = situation_batch.to(device)
@@ -432,17 +477,10 @@ def train(
             target_positions_batch = target_positions_batch.to(device)
             input_lengths_batch = input_lengths_batch.to(device)
             target_lengths_batch = target_lengths_batch.to(device)
-            # Instead of calling forward(), we call the graph model wrapper.
-            main_low = {
-                "commands_input": input_batch, 
-                "commands_lengths": input_lengths_batch,
-                "situations_input": situation_batch,
-                "target_batch": target_batch,
-                "target_lengths": target_lengths_batch,
-            }
-            g_main_low = GraphInput(main_low, batched=True, batch_dim=0, cache_results=False)
+            # intervened data.
+            intervened_target_batch = intervened_target_batch.to(device)
+            intervened_target_lengths_batch = intervened_target_lengths_batch.to(device)
             
-            ## dual
             dual_input_max_seq_lens = max(dual_input_lengths_batch)[0]
             dual_target_max_seq_lens = max(dual_target_lengths_batch)[0]
             dual_input_batch = dual_input_batch.to(device)
@@ -452,43 +490,104 @@ def train(
             dual_target_positions_batch = dual_target_positions_batch.to(device)
             dual_input_lengths_batch = dual_input_lengths_batch.to(device)
             dual_target_lengths_batch = dual_target_lengths_batch.to(device)
-            # Instead of calling forward(), we call the graph model wrapper.
-            dual_low = {
-                "commands_input": dual_input_batch, 
-                "commands_lengths": dual_input_lengths_batch,
-                "situations_input": dual_situation_batch,
-                "target_batch": dual_target_batch,
-                "target_lengths": dual_target_lengths_batch,
-            }
-            g_dual_low = GraphInput(dual_low, batched=True, batch_dim=0, cache_results=False)
+            
+            # low level intervention.
+            intervened_scores_batch = []
+            idx_generator = [i for i in range(batch_size)]
+            idx_selected = random.sample(idx_generator, k=cf_sample_per_batch)
+            intervened_target_batch_selected = []
+            for i in idx_selected:
+                main_low = {
+                    "commands_input": input_batch[i].unsqueeze(dim=0), 
+                    "commands_lengths": input_lengths_batch[i].unsqueeze(dim=0),
+                    "situations_input": situation_batch[i].unsqueeze(dim=0),
+                    # these two fields need to be updated well.
+                    "target_batch": intervened_target_batch[i].unsqueeze(dim=0),
+                    "target_lengths": intervened_target_lengths_batch[i].unsqueeze(dim=0),
+                }
+                intervened_target_batch_selected += [intervened_target_batch[i].unsqueeze(dim=0)]
+                g_main_low = GraphInput(main_low, batched=True, batch_dim=0, cache_results=False)
+
+                ## dual
+                dual_low = {
+                    "commands_input": dual_input_batch[i].unsqueeze(dim=0), 
+                    "commands_lengths": dual_input_lengths_batch[i].unsqueeze(dim=0),
+                    "situations_input": dual_situation_batch[i].unsqueeze(dim=0),
+                    "target_batch": dual_target_batch[i].unsqueeze(dim=0),
+                    "target_lengths": dual_target_lengths_batch[i].unsqueeze(dim=0),
+                }
+                g_dual_low = GraphInput(dual_low, batched=True, batch_dim=0, cache_results=False)
+                
+                # -1 for one offset in low model?
+                lstm_step = high_intervene_time[i]-1
+                dual_low_hidden = low_model_cf.compute_node(f'lstm_step_{lstm_step}', g_dual_low)
+                # splice based on what we intervene.
+                s_idx = intervene_attribute*25
+                e_idx = intervene_attribute*25+25
+                intervene_low = dual_low_hidden[:,s_idx:e_idx]
+                intervention_dict = {f"lstm_step_{lstm_step}[:,{s_idx}:{e_idx}]": intervene_low}
+                low_interv = Intervention(
+                    g_main_low, intervention_dict, 
+                    cache_results=False,
+                    cache_base_results=False,
+                    batched=True
+                )
+                intervened_scores = []
+                _step = train_max_decoding_steps-1
+                _, intervened_score = low_model_cf.intervene_node(f"lstm_step_{_step}", low_interv)
+                
+                hidden_dim = 100
+                max_decode_step = train_max_decoding_steps
+                image_size = 6
+                vocab_size = 6
+                output_s = hidden_dim*2+max_decode_step+1+image_size*image_size*hidden_dim+vocab_size
+                output_e = hidden_dim*2+max_decode_step+1+image_size*image_size*hidden_dim+vocab_size*(max_decode_step+1)
+                intervened_scores = intervened_score[:,output_s:output_e].reshape(1, max_decode_step, -1)
+                intervened_scores_batch += [intervened_scores]
+            intervened_scores_batch = torch.cat(intervened_scores_batch, dim=0)
+            intervened_target_batch_selected = torch.cat(intervened_target_batch_selected, dim=0)
             #####################
             #
             # low data end
             #
             #####################
             
-            
+            # Counterfactual loss
+            intervened_scores_batch = F.log_softmax(intervened_scores_batch, dim=-1)
+            cf_loss = model(
+                loss_target_scores=intervened_scores_batch, 
+                loss_target_batch=intervened_target_batch_selected,
+                tag="loss"
+            )
+            if use_cuda and n_gpu > 1:
+                cf_loss = cf_loss.mean() # mean() to average on multi-gpu.
+
             # Main task loss
             '''
             We calculate this loss using the pytorch module, 
             as it is much quicker.
             '''
-            target_scores = low_model.compute(g_main_low)
-            loss = model(
+            forward_main_low = {
+                "commands_input": input_batch, 
+                "commands_lengths": input_lengths_batch,
+                "situations_input": situation_batch,
+                # these two fields need to be updated well.
+                "target_batch": target_batch,
+                "target_lengths": target_lengths_batch,
+            }
+            g_forward_main_low = GraphInput(forward_main_low, batched=True, batch_dim=0, cache_results=False)
+            target_scores = low_model.compute(g_forward_main_low)
+            main_loss = model(
                 loss_target_scores=target_scores, 
                 loss_target_batch=target_batch,
                 tag="loss"
             )
+            
             if use_cuda and n_gpu > 1:
-                loss = loss.mean() # mean() to average on multi-gpu.
+                main_loss = main_loss.mean() # mean() to average on multi-gpu.
             # we need to average over actual length to get rid of padding losses.
             # loss /= target_lengths_batch.sum()
-            if auxiliary_task:
-                target_loss = 0
-                pass
-            else:
-                target_loss = 0
-            loss += weight_target_loss * target_loss
+            loss = cf_loss + main_loss
             # Backward pass and update model parameters.
             loss.backward()
             optimizer.step()
@@ -539,18 +638,20 @@ def train(
                             is_best=is_best,
                             tag="update_state"
                         )
-                    file_name = "checkpoint.pth.tar".format(str(training_iteration))
+                    file_name = "best_checkpoint.pth.tar".format(str(training_iteration))
                     if is_best:
-                        pass
-                        # model.save_checkpoint(file_name=file_name, is_best=is_best,
-                        #                       optimizer_state_dict=optimizer.state_dict())
-                
+                        model.save_checkpoint(file_name=file_name, is_best=is_best,
+                                              optimizer_state_dict=optimizer.state_dict())
+            if training_iteration % checkpoint_save_every == 0:
+                file_name = f"checkpoint-{training_iteration}.pth.tar"
+                model.save_checkpoint(file_name=file_name, is_best=False,
+                                      optimizer_state_dict=optimizer.state_dict())
             training_iteration += 1
             if training_iteration > max_training_iterations:
                 break
 
 
-# In[ ]:
+# In[5]:
 
 
 def main(flags):
