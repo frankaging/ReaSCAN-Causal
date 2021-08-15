@@ -224,8 +224,11 @@ def train(
     k: int, 
     # counterfactual training arguments
     cf_mode: str,
+    cf_sample_p: float,
+    checkpoint_save_every: int,
     max_training_examples=None, 
-    seed=42,     
+    seed=42,
+    run_name="",
     **kwargs
 ):
     cfg = locals().copy()
@@ -236,8 +239,9 @@ def train(
     
     from pathlib import Path
     # the output directory name is generated on-the-fly.
-    run_name = f"seq2seq_seed_{seed}_max_itr_{max_training_iterations}_cf_mode_{cf_mode}"
+    run_name = f"seq2seq_seed_{seed}_max-itr_{max_training_iterations}_cf-mode_{cf_mode}_cf-sample-p_{cf_sample_p}"
     output_directory = os.path.join(output_directory, run_name)
+    cfg["output_directory"] = output_directory
     logger.info(f"Create the output directory if not exist: {output_directory}")
     Path(output_directory).mkdir(parents=True, exist_ok=True)
     
@@ -362,9 +366,8 @@ def train(
     logger.info("Training starts..")
     training_iteration = start_iteration
     cf_loss_weight = 0.5
-    checkpoint_save_every = 10000
-    cf_sample_per_batch = 10
-    logger.info(f"Setting cf_sample_per_batch = {cf_sample_per_batch}")
+    cf_sample_per_batch_in_percentage = cf_sample_p
+    logger.info(f"Setting cf_sample_per_batch_in_percentage = {cf_sample_per_batch_in_percentage}")
     while training_iteration < max_training_iterations:
 
         # Shuffle the dataset and loop over it.
@@ -384,6 +387,7 @@ def train(
             2: orientation
             """
             intervene_attribute = random.choice([0,1,2])
+            intervene_time = random.randint(1, train_max_decoding_steps-1) # we get rid of SOS and EOS tokens
             input_max_seq_lens = max(input_lengths_batch)[0]
             target_max_seq_lens = max(target_lengths_batch)[0]
             #####################
@@ -396,7 +400,7 @@ def train(
             batch_size = agent_positions_batch.size(0)
             intervened_target_batch = []
             intervened_target_lengths_batch = []
-            high_intervene_time = []
+            cf_sample_per_batch = int(batch_size*cf_sample_per_batch_in_percentage)
             for i in range(batch_size):
                 ## main
                 main_high = {
@@ -411,8 +415,7 @@ def train(
                 }
                 g_dual_high = GraphInput(dual_high, batched=True, batch_dim=0, cache_results=False)
                 dual_target_length = dual_target_lengths_batch[i][0].tolist()
-                intervene_time = random.randint(1, dual_target_length-1) # we get rid of SOS and EOS tokens
-                high_intervene_time += [intervene_time]
+
                 # get the duel high state
                 main_high_hidden = hi_model.compute_node(f"s{intervene_time}", g_main_high)
                 dual_high_hidden = hi_model.compute_node(f"s{intervene_time}", g_dual_high)
@@ -492,60 +495,56 @@ def train(
             dual_target_lengths_batch = dual_target_lengths_batch.to(device)
             
             # low level intervention.
+            # Major update:
+            # We need to batch these operations.
             intervened_scores_batch = []
             idx_generator = [i for i in range(batch_size)]
             idx_selected = random.sample(idx_generator, k=cf_sample_per_batch)
             intervened_target_batch_selected = []
-            for i in idx_selected:
-                main_low = {
-                    "commands_input": input_batch[i].unsqueeze(dim=0), 
-                    "commands_lengths": input_lengths_batch[i].unsqueeze(dim=0),
-                    "situations_input": situation_batch[i].unsqueeze(dim=0),
-                    # these two fields need to be updated well.
-                    "target_batch": intervened_target_batch[i].unsqueeze(dim=0),
-                    "target_lengths": intervened_target_lengths_batch[i].unsqueeze(dim=0),
-                }
-                intervened_target_batch_selected += [intervened_target_batch[i].unsqueeze(dim=0)]
-                g_main_low = GraphInput(main_low, batched=True, batch_dim=0, cache_results=False)
+            
+            main_low = {
+                "commands_input": input_batch[idx_selected], 
+                "commands_lengths": input_lengths_batch[idx_selected],
+                "situations_input": situation_batch[idx_selected],
+                # these two fields need to be updated well.
+                "target_batch": intervened_target_batch[idx_selected],
+                "target_lengths": intervened_target_lengths_batch[idx_selected],
+            }
+            g_main_low = GraphInput(main_low, batched=True, batch_dim=0, cache_results=False)
 
-                ## dual
-                dual_low = {
-                    "commands_input": dual_input_batch[i].unsqueeze(dim=0), 
-                    "commands_lengths": dual_input_lengths_batch[i].unsqueeze(dim=0),
-                    "situations_input": dual_situation_batch[i].unsqueeze(dim=0),
-                    "target_batch": dual_target_batch[i].unsqueeze(dim=0),
-                    "target_lengths": dual_target_lengths_batch[i].unsqueeze(dim=0),
-                }
-                g_dual_low = GraphInput(dual_low, batched=True, batch_dim=0, cache_results=False)
-                
-                # -1 for one offset in low model?
-                lstm_step = high_intervene_time[i]-1
-                dual_low_hidden = low_model_cf.compute_node(f'lstm_step_{lstm_step}', g_dual_low)
-                # splice based on what we intervene.
-                s_idx = intervene_attribute*25
-                e_idx = intervene_attribute*25+25
-                intervene_low = dual_low_hidden[:,s_idx:e_idx]
-                intervention_dict = {f"lstm_step_{lstm_step}[:,{s_idx}:{e_idx}]": intervene_low}
-                low_interv = Intervention(
-                    g_main_low, intervention_dict, 
-                    cache_results=False,
-                    cache_base_results=False,
-                    batched=True
-                )
-                intervened_scores = []
-                _step = train_max_decoding_steps-1
-                _, intervened_score = low_model_cf.intervene_node(f"lstm_step_{_step}", low_interv)
-                
-                hidden_dim = 100
-                max_decode_step = train_max_decoding_steps
-                image_size = 6
-                vocab_size = 6
-                output_s = hidden_dim*2+max_decode_step+1+image_size*image_size*hidden_dim+vocab_size
-                output_e = hidden_dim*2+max_decode_step+1+image_size*image_size*hidden_dim+vocab_size*(max_decode_step+1)
-                intervened_scores = intervened_score[:,output_s:output_e].reshape(1, max_decode_step, -1)
-                intervened_scores_batch += [intervened_scores]
-            intervened_scores_batch = torch.cat(intervened_scores_batch, dim=0)
-            intervened_target_batch_selected = torch.cat(intervened_target_batch_selected, dim=0)
+            ## dual
+            dual_low = {
+                "commands_input": dual_input_batch[idx_selected], 
+                "commands_lengths": dual_input_lengths_batch[idx_selected],
+                "situations_input": dual_situation_batch[idx_selected],
+                "target_batch": dual_target_batch[idx_selected],
+                "target_lengths": dual_target_lengths_batch[idx_selected],
+            }
+            g_dual_low = GraphInput(dual_low, batched=True, batch_dim=0, cache_results=False)
+            
+            # -1 for one offset in low model?
+            lstm_step = intervene_time-1
+            dual_low_hidden = low_model_cf.compute_node(f'lstm_step_{lstm_step}', g_dual_low)
+            # splice based on what we intervene.
+            s_idx = intervene_attribute*25
+            e_idx = intervene_attribute*25+25
+            intervene_low = dual_low_hidden[:,s_idx:e_idx]
+            intervention_dict = {f"lstm_step_{lstm_step}[:,{s_idx}:{e_idx}]": intervene_low}
+            low_interv = Intervention(
+                g_main_low, intervention_dict, 
+                cache_results=False,
+                cache_base_results=False,
+                batched=True
+            )
+            _step = train_max_decoding_steps-1
+            _, intervened_scores = low_model_cf.intervene_node(f"lstm_step_{_step}", low_interv)
+            hidden_dim = 100
+            max_decode_step = train_max_decoding_steps
+            image_size = 6
+            vocab_size = 6
+            output_s = hidden_dim*2+max_decode_step+1+image_size*image_size*hidden_dim+vocab_size
+            output_e = hidden_dim*2+max_decode_step+1+image_size*image_size*hidden_dim+vocab_size*(max_decode_step+1)
+            intervened_scores_batch = intervened_scores[:,output_s:output_e].reshape(cf_sample_per_batch, max_decode_step, -1)
             #####################
             #
             # low data end
@@ -556,7 +555,7 @@ def train(
             intervened_scores_batch = F.log_softmax(intervened_scores_batch, dim=-1)
             cf_loss = model(
                 loss_target_scores=intervened_scores_batch, 
-                loss_target_batch=intervened_target_batch_selected,
+                loss_target_batch=intervened_target_batch[idx_selected],
                 tag="loss"
             )
             if use_cuda and n_gpu > 1:
@@ -638,14 +637,13 @@ def train(
                             is_best=is_best,
                             tag="update_state"
                         )
-                    file_name = "best_checkpoint.pth.tar".format(str(training_iteration))
-                    if is_best:
-                        model.save_checkpoint(file_name=file_name, is_best=is_best,
-                                              optimizer_state_dict=optimizer.state_dict())
-            if training_iteration % checkpoint_save_every == 0:
-                file_name = f"checkpoint-{training_iteration}.pth.tar"
-                model.save_checkpoint(file_name=file_name, is_best=False,
-                                      optimizer_state_dict=optimizer.state_dict())
+                    file_name = f"checkpoint-{training_iteration}.pth.tar"
+                    model.save_checkpoint(file_name=file_name, is_best=is_best,
+                                          optimizer_state_dict=optimizer.state_dict())
+            # if training_iteration % checkpoint_save_every == 0:
+            #     file_name = f"checkpoint-{training_iteration}.pth.tar"
+            #     model.save_checkpoint(file_name=file_name, is_best=False,
+            #                           optimizer_state_dict=optimizer.state_dict())
             training_iteration += 1
             if training_iteration > max_training_iterations:
                 break

@@ -29,6 +29,7 @@ class Model(nn.Module):
                  simple_situation_representation: bool, attention_type: str, **kwargs):
         super(Model, self).__init__()
 
+        logger.warning(f"Model output directory: {output_directory}")
         self.simple_situation_representation = simple_situation_representation
         if not simple_situation_representation:
             logger.warning("DownSamplingConvolutionalNet not correctly implemented. Update or set "

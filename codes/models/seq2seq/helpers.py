@@ -147,7 +147,10 @@ def arg_parse():
     
     # Counterfactual arguments
     parser.add_argument("--cf_mode", type=str, default="random", help="What mode are you in for your counterfactual training.")
-    
+    parser.add_argument("--run_name", type=str, default="")
+    parser.add_argument("--cf_sample_p", type=float, default=0.25, help="Percentage of examples in a batch to include counterfactual loss")
+    parser.add_argument("--checkpoint_save_every", type=int, default=2000)
+
     try:
         get_ipython().run_line_magic('matplotlib', 'inline')
         args = parser.parse_args([])
