@@ -150,7 +150,8 @@ def arg_parse():
     parser.add_argument("--run_name", type=str, default="")
     parser.add_argument("--cf_sample_p", type=float, default=0.25, help="Percentage of examples in a batch to include counterfactual loss")
     parser.add_argument("--checkpoint_save_every", type=int, default=2000)
-
+    parser.add_argument("--evaluate_checkpoint", type=str, default="")
+    
     try:
         get_ipython().run_line_magic('matplotlib', 'inline')
         args = parser.parse_args([])

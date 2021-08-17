@@ -121,12 +121,9 @@ def predict(
         contexts_situation = []
         token = torch.tensor([sos_idx], dtype=torch.long, device=device)
         decoding_iteration = 0
-        attention_weights_commands = []
-        attention_weights_situations = []
         while token != eos_idx and decoding_iteration <= max_decoding_steps:
             
-            (output, hidden, context_situation, attention_weights_command,
-             attention_weights_situation) = model(
+            (output, hidden) = model(
                 lstm_input_tokens_sorted=token,
                 lstm_hidden=hidden,
                 lstm_projected_keys_textual=projected_keys_textual,
@@ -138,21 +135,15 @@ def predict(
             token = output.max(dim=-1)[1]
 
             output_sequence.append(token.data[0].item())
-            attention_weights_commands.append(attention_weights_command.tolist())
-            attention_weights_situations.append(attention_weights_situation.tolist())
-            contexts_situation.append(context_situation.unsqueeze(1))
             decoding_iteration += 1
 
         if output_sequence[-1] == eos_idx:
             output_sequence.pop()
-            attention_weights_commands.pop()
-            attention_weights_situations.pop()
         if model(tag="auxiliary_task"):
             pass
         else:
             auxiliary_accuracy_agent, auxiliary_accuracy_target = 0, 0
-        yield (input_sequence, output_sequence, target_sequence,
-               attention_weights_commands, attention_weights_situations, auxiliary_accuracy_target)
+        yield (input_sequence, output_sequence, target_sequence, auxiliary_accuracy_target)
 
     elapsed_time = time.time() - start_time
     logging.info("Predicted for {} examples.".format(i))
@@ -175,7 +166,7 @@ def evaluate(
     accuracies = []
     target_accuracies = []
     exact_match = 0
-    for input_sequence, output_sequence, target_sequence, _, _, aux_acc_target in predict(
+    for input_sequence, output_sequence, target_sequence, aux_acc_target in predict(
             data_iterator=data_iterator, model=model, max_decoding_steps=max_decoding_steps, pad_idx=pad_idx,
             sos_idx=sos_idx, eos_idx=eos_idx, max_examples_to_evaluate=max_examples_to_evaluate, device=device):
         accuracy = sequence_accuracy(output_sequence, target_sequence[0].tolist()[1:-1])
@@ -239,6 +230,7 @@ def train(
     # the output directory name is generated on-the-fly.
     run_name = f"seq2seq_seed_{seed}_max_itr_{max_training_iterations}"
     output_directory = os.path.join(output_directory, run_name)
+    cfg["output_directory"] = output_directory
     logger.info(f"Create the output directory if not exist: {output_directory}")
     Path(output_directory).mkdir(parents=True, exist_ok=True)
     
@@ -437,11 +429,9 @@ def train(
                             is_best=is_best,
                             tag="update_state"
                         )
-                    file_name = "checkpoint.pth.tar".format(str(training_iteration))
-                    if is_best:
-                        pass
-                        # model.save_checkpoint(file_name=file_name, is_best=is_best,
-                        #                       optimizer_state_dict=optimizer.state_dict())
+                    file_name = f"checkpoint-{training_iteration}.pth.tar"
+                    model.save_checkpoint(file_name=file_name, is_best=is_best,
+                                          optimizer_state_dict=optimizer.state_dict())
                 
             training_iteration += 1
             if training_iteration > max_training_iterations:

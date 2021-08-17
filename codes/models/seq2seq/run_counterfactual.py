@@ -387,9 +387,11 @@ def train(
             2: orientation
             """
             intervene_attribute = random.choice([0,1,2])
-            intervene_time = random.randint(1, train_max_decoding_steps-1) # we get rid of SOS and EOS tokens
             input_max_seq_lens = max(input_lengths_batch)[0]
             target_max_seq_lens = max(target_lengths_batch)[0]
+            dual_target_max_seq_lens = max(dual_target_lengths_batch)[0]
+            intervene_time = random.randint(1, min(target_max_seq_lens, dual_target_max_seq_lens)-1) # we get rid of SOS and EOS tokens
+
             #####################
             #
             # high data start
@@ -498,68 +500,84 @@ def train(
             # Major update:
             # We need to batch these operations.
             intervened_scores_batch = []
-            idx_generator = [i for i in range(batch_size)]
-            idx_selected = random.sample(idx_generator, k=cf_sample_per_batch)
-            intervened_target_batch_selected = []
+            # here, we only care where those intervened target is different
+            # from the original main target.
+            idx_generator = []
+            for i in range(batch_size):
+                match_target_intervened = intervened_target_batch[i,:intervened_target_lengths_batch[i,0]]
+                match_target_main = target_batch[i,:target_lengths_batch[i,0]]
+                is_bad_intervened = torch.equal(match_target_intervened, match_target_main)
+                if is_bad_intervened:
+                    continue # we need to skip these.
+                else:
+                    idx_generator += [i]
             
-            main_low = {
-                "commands_input": input_batch[idx_selected], 
-                "commands_lengths": input_lengths_batch[idx_selected],
-                "situations_input": situation_batch[idx_selected],
-                # these two fields need to be updated well.
-                "target_batch": intervened_target_batch[idx_selected],
-                "target_lengths": intervened_target_lengths_batch[idx_selected],
-            }
-            g_main_low = GraphInput(main_low, batched=True, batch_dim=0, cache_results=False)
+            # if there is no such examples, we skip this batch.
+            cf_loss = None
+            if len(idx_generator) > 0:
+                # overwrite a bit.
+                cf_sample_per_batch = min(cf_sample_per_batch, len(idx_generator))
+                idx_selected = random.sample(idx_generator, k=cf_sample_per_batch)
+                intervened_target_batch_selected = []
 
-            ## dual
-            dual_low = {
-                "commands_input": dual_input_batch[idx_selected], 
-                "commands_lengths": dual_input_lengths_batch[idx_selected],
-                "situations_input": dual_situation_batch[idx_selected],
-                "target_batch": dual_target_batch[idx_selected],
-                "target_lengths": dual_target_lengths_batch[idx_selected],
-            }
-            g_dual_low = GraphInput(dual_low, batched=True, batch_dim=0, cache_results=False)
-            
-            # -1 for one offset in low model?
-            lstm_step = intervene_time-1
-            dual_low_hidden = low_model_cf.compute_node(f'lstm_step_{lstm_step}', g_dual_low)
-            # splice based on what we intervene.
-            s_idx = intervene_attribute*25
-            e_idx = intervene_attribute*25+25
-            intervene_low = dual_low_hidden[:,s_idx:e_idx]
-            intervention_dict = {f"lstm_step_{lstm_step}[:,{s_idx}:{e_idx}]": intervene_low}
-            low_interv = Intervention(
-                g_main_low, intervention_dict, 
-                cache_results=False,
-                cache_base_results=False,
-                batched=True
-            )
-            _step = train_max_decoding_steps-1
-            _, intervened_scores = low_model_cf.intervene_node(f"lstm_step_{_step}", low_interv)
-            hidden_dim = 100
-            max_decode_step = train_max_decoding_steps
-            image_size = 6
-            vocab_size = 6
-            output_s = hidden_dim*2+max_decode_step+1+image_size*image_size*hidden_dim+vocab_size
-            output_e = hidden_dim*2+max_decode_step+1+image_size*image_size*hidden_dim+vocab_size*(max_decode_step+1)
-            intervened_scores_batch = intervened_scores[:,output_s:output_e].reshape(cf_sample_per_batch, max_decode_step, -1)
-            #####################
-            #
-            # low data end
-            #
-            #####################
-            
-            # Counterfactual loss
-            intervened_scores_batch = F.log_softmax(intervened_scores_batch, dim=-1)
-            cf_loss = model(
-                loss_target_scores=intervened_scores_batch, 
-                loss_target_batch=intervened_target_batch[idx_selected],
-                tag="loss"
-            )
-            if use_cuda and n_gpu > 1:
-                cf_loss = cf_loss.mean() # mean() to average on multi-gpu.
+                main_low = {
+                    "commands_input": input_batch[idx_selected], 
+                    "commands_lengths": input_lengths_batch[idx_selected],
+                    "situations_input": situation_batch[idx_selected],
+                    # these two fields need to be updated well.
+                    "target_batch": intervened_target_batch[idx_selected],
+                    "target_lengths": intervened_target_lengths_batch[idx_selected],
+                }
+                g_main_low = GraphInput(main_low, batched=True, batch_dim=0, cache_results=False)
+
+                ## dual
+                dual_low = {
+                    "commands_input": dual_input_batch[idx_selected], 
+                    "commands_lengths": dual_input_lengths_batch[idx_selected],
+                    "situations_input": dual_situation_batch[idx_selected],
+                    "target_batch": dual_target_batch[idx_selected],
+                    "target_lengths": dual_target_lengths_batch[idx_selected],
+                }
+                g_dual_low = GraphInput(dual_low, batched=True, batch_dim=0, cache_results=False)
+
+                # -1 for one offset in low model?
+                lstm_step = intervene_time-1
+                dual_low_hidden = low_model_cf.compute_node(f'lstm_step_{lstm_step}', g_dual_low)
+                # splice based on what we intervene.
+                s_idx = intervene_attribute*25
+                e_idx = intervene_attribute*25+25
+                intervene_low = dual_low_hidden[:,s_idx:e_idx]
+                intervention_dict = {f"lstm_step_{lstm_step}[:,{s_idx}:{e_idx}]": intervene_low}
+                low_interv = Intervention(
+                    g_main_low, intervention_dict, 
+                    cache_results=False,
+                    cache_base_results=False,
+                    batched=True
+                )
+                _step = train_max_decoding_steps-1
+                _, intervened_scores = low_model_cf.intervene_node(f"lstm_step_{_step}", low_interv)
+                hidden_dim = 100
+                max_decode_step = train_max_decoding_steps
+                image_size = 6
+                vocab_size = 6
+                output_s = hidden_dim*2+max_decode_step+1+image_size*image_size*hidden_dim+vocab_size
+                output_e = hidden_dim*2+max_decode_step+1+image_size*image_size*hidden_dim+vocab_size*(max_decode_step+1)
+                intervened_scores_batch = intervened_scores[:,output_s:output_e].reshape(cf_sample_per_batch, max_decode_step, -1)
+                #####################
+                #
+                # low data end
+                #
+                #####################
+
+                # Counterfactual loss
+                intervened_scores_batch = F.log_softmax(intervened_scores_batch, dim=-1)
+                cf_loss = model(
+                    loss_target_scores=intervened_scores_batch, 
+                    loss_target_batch=intervened_target_batch[idx_selected],
+                    tag="loss"
+                )
+                if use_cuda and n_gpu > 1:
+                    cf_loss = cf_loss.mean() # mean() to average on multi-gpu.
 
             # Main task loss
             '''
@@ -586,7 +604,10 @@ def train(
                 main_loss = main_loss.mean() # mean() to average on multi-gpu.
             # we need to average over actual length to get rid of padding losses.
             # loss /= target_lengths_batch.sum()
-            loss = cf_loss + main_loss
+            if cf_loss:
+                loss = cf_loss + main_loss
+            else:
+                loss = main_loss
             # Backward pass and update model parameters.
             loss.backward()
             optimizer.step()
