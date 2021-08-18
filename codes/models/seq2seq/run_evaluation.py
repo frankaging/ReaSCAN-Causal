@@ -717,7 +717,7 @@ def main(flags):
                 output_file_path=output_file_path, 
                 device=device,
                 # we don't need counterfactual evaluation on generalization splits for now.
-                counterfactual_evaluate=True if split == "dev" or split == "test" else False,
+                counterfactual_evaluate=True if split == "dev" or split == "test" or split == "train" else False,
                 **flags
             )
             logger.info("Saved predictions to {}".format(output_file))

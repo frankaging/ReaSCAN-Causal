@@ -151,6 +151,11 @@ def arg_parse():
     parser.add_argument("--cf_sample_p", type=float, default=0.25, help="Percentage of examples in a batch to include counterfactual loss")
     parser.add_argument("--checkpoint_save_every", type=int, default=2000)
     parser.add_argument("--evaluate_checkpoint", type=str, default="")
+    parser.add_argument("--include_task_loss", dest="include_task_loss", default=False,
+                        action="store_true", help="Whether to include task loss during counterfactual training.")
+    parser.add_argument("--include_cf_loss", dest="include_cf_loss", default=False,
+                        action="store_true", help="Whether to include counterfactual loss during counterfactual training")
+    parser.add_argument("--cf_loss_weight", type=float, default=1.0, help="Weight of cf loss comparing to the task loss")
     
     try:
         get_ipython().run_line_magic('matplotlib', 'inline')

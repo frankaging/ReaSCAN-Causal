@@ -226,11 +226,17 @@ def train(
     cf_mode: str,
     cf_sample_p: float,
     checkpoint_save_every: int,
+    include_cf_loss: bool,
+    include_task_loss: bool,
     max_training_examples=None, 
     seed=42,
     run_name="",
     **kwargs
 ):
+    # we at least need to have one kind of loss.
+    logger.info(f"LOSS CONFIG: include_task_loss={include_task_loss}, include_cf_loss={include_cf_loss}...")
+
+    assert include_cf_loss or include_task_loss
     cfg = locals().copy()
 
     random.seed(seed)
@@ -378,7 +384,53 @@ def train(
             is_best = False
             model.train()
             
-            # what to intervene
+            input_batch = input_batch.to(device)
+            target_batch = target_batch.to(device)
+            situation_batch = situation_batch.to(device)
+            agent_positions_batch = agent_positions_batch.to(device)
+            target_positions_batch = target_positions_batch.to(device)
+            input_lengths_batch = input_lengths_batch.to(device)
+            target_lengths_batch = target_lengths_batch.to(device)
+            
+            dual_input_max_seq_lens = max(dual_input_lengths_batch)[0]
+            dual_target_max_seq_lens = max(dual_target_lengths_batch)[0]
+            dual_input_batch = dual_input_batch.to(device)
+            dual_target_batch = dual_target_batch.to(device)
+            dual_situation_batch = dual_situation_batch.to(device)
+            dual_agent_positions_batch = dual_agent_positions_batch.to(device)
+            dual_target_positions_batch = dual_target_positions_batch.to(device)
+            dual_input_lengths_batch = dual_input_lengths_batch.to(device)
+            dual_target_lengths_batch = dual_target_lengths_batch.to(device)
+            
+            task_loss = None
+            cf_loss = None
+            
+            # Main task loss first!
+            '''
+            We calculate this loss using the pytorch module, 
+            as it is much quicker.
+            '''
+            
+            # we will calculate these anyway
+            # even if we don't prop loss, we need to evaluate.
+            forward_main_low = {
+                "commands_input": input_batch, 
+                "commands_lengths": input_lengths_batch,
+                "situations_input": situation_batch,
+                "target_batch": target_batch,
+                "target_lengths": target_lengths_batch,
+            }
+            g_forward_main_low = GraphInput(forward_main_low, batched=True, batch_dim=0, cache_results=False)
+            target_scores = low_model.compute(g_forward_main_low)
+            task_loss = model(
+                loss_target_scores=target_scores, 
+                loss_target_batch=target_batch,
+                tag="loss"
+            )
+            if use_cuda and n_gpu > 1:
+                task_loss = task_loss.mean() # mean() to average on multi-gpu.
+            
+            # Calculate intervention loss.
             """
             For the sake of quick training, for a single batch,
             we select the same attribute to intervenen on:
@@ -397,7 +449,7 @@ def train(
             # high data start
             #
             #####################
-            
+
             # to have high quality high data, we need to iterate through each example.
             batch_size = agent_positions_batch.size(0)
             intervened_target_batch = []
@@ -446,7 +498,7 @@ def train(
                         break
                     else:
                         intervened_outputs.append(intervened_output[0,3].tolist())
-            
+
             for i in range(batch_size):
                 # we need to pad to the longest ones.
                 intervened_target_batch[i] = torch.cat([
@@ -457,14 +509,18 @@ def train(
             intervened_target_batch = torch.stack(intervened_target_batch, dim=0)
             # we need to truncate if this is longer than the maximum target length
             # of original target length.
-            
+
+            # intervened data.
+            intervened_target_batch = intervened_target_batch.to(device)
+            intervened_target_lengths_batch = intervened_target_lengths_batch.to(device)
+
             #####################
             #
             # high data end
             #
             #####################
 
-            
+
             #####################
             #
             # low data start
@@ -473,29 +529,7 @@ def train(
             ## main
             """
             Low level data requires GPU forwarding.
-            """
-            
-            input_batch = input_batch.to(device)
-            target_batch = target_batch.to(device)
-            situation_batch = situation_batch.to(device)
-            agent_positions_batch = agent_positions_batch.to(device)
-            target_positions_batch = target_positions_batch.to(device)
-            input_lengths_batch = input_lengths_batch.to(device)
-            target_lengths_batch = target_lengths_batch.to(device)
-            # intervened data.
-            intervened_target_batch = intervened_target_batch.to(device)
-            intervened_target_lengths_batch = intervened_target_lengths_batch.to(device)
-            
-            dual_input_max_seq_lens = max(dual_input_lengths_batch)[0]
-            dual_target_max_seq_lens = max(dual_target_lengths_batch)[0]
-            dual_input_batch = dual_input_batch.to(device)
-            dual_target_batch = dual_target_batch.to(device)
-            dual_situation_batch = dual_situation_batch.to(device)
-            dual_agent_positions_batch = dual_agent_positions_batch.to(device)
-            dual_target_positions_batch = dual_target_positions_batch.to(device)
-            dual_input_lengths_batch = dual_input_lengths_batch.to(device)
-            dual_target_lengths_batch = dual_target_lengths_batch.to(device)
-            
+            """ 
             # low level intervention.
             # Major update:
             # We need to batch these operations.
@@ -511,103 +545,143 @@ def train(
                     continue # we need to skip these.
                 else:
                     idx_generator += [i]
-            
-            # if there is no such examples, we skip this batch.
-            cf_loss = None
+
+            # Let us get rid of antra, using a very simple for loop
+            # to do this intervention.
             if len(idx_generator) > 0:
                 # overwrite a bit.
                 cf_sample_per_batch = min(cf_sample_per_batch, len(idx_generator))
                 idx_selected = random.sample(idx_generator, k=cf_sample_per_batch)
                 intervened_target_batch_selected = []
 
-                main_low = {
-                    "commands_input": input_batch[idx_selected], 
-                    "commands_lengths": input_lengths_batch[idx_selected],
-                    "situations_input": situation_batch[idx_selected],
-                    # these two fields need to be updated well.
-                    "target_batch": intervened_target_batch[idx_selected],
-                    "target_lengths": intervened_target_lengths_batch[idx_selected],
-                }
-                g_main_low = GraphInput(main_low, batched=True, batch_dim=0, cache_results=False)
+                # filter based on selection all together!
+                situation_batch = situation_batch[idx_selected]
+                input_batch = input_batch[idx_selected]
+                input_lengths_batch = input_lengths_batch[idx_selected]
+                dual_situation_batch = dual_situation_batch[idx_selected]
+                dual_input_batch = dual_input_batch[idx_selected]
+                dual_input_lengths_batch = dual_input_lengths_batch[idx_selected]
+                dual_target_batch = dual_target_batch[idx_selected]
+                intervened_target_lengths_batch = intervened_target_lengths_batch[idx_selected]
+                intervened_target_batch = intervened_target_batch[idx_selected]
 
-                ## dual
-                dual_low = {
-                    "commands_input": dual_input_batch[idx_selected], 
-                    "commands_lengths": dual_input_lengths_batch[idx_selected],
-                    "situations_input": dual_situation_batch[idx_selected],
-                    "target_batch": dual_target_batch[idx_selected],
-                    "target_lengths": dual_target_lengths_batch[idx_selected],
-                }
-                g_dual_low = GraphInput(dual_low, batched=True, batch_dim=0, cache_results=False)
-
-                # -1 for one offset in low model?
-                lstm_step = intervene_time-1
-                dual_low_hidden = low_model_cf.compute_node(f'lstm_step_{lstm_step}', g_dual_low)
-                # splice based on what we intervene.
-                s_idx = intervene_attribute*25
-                e_idx = intervene_attribute*25+25
-                intervene_low = dual_low_hidden[:,s_idx:e_idx]
-                intervention_dict = {f"lstm_step_{lstm_step}[:,{s_idx}:{e_idx}]": intervene_low}
-                low_interv = Intervention(
-                    g_main_low, intervention_dict, 
-                    cache_results=False,
-                    cache_base_results=False,
-                    batched=True
+                # we use the main hidden to track.
+                encoded_image = model(
+                    situations_input=situation_batch,
+                    tag="situation_encode"
                 )
-                _step = train_max_decoding_steps-1
-                _, intervened_scores = low_model_cf.intervene_node(f"lstm_step_{_step}", low_interv)
-                hidden_dim = 100
-                max_decode_step = train_max_decoding_steps
-                image_size = 6
-                vocab_size = 6
-                output_s = hidden_dim*2+max_decode_step+1+image_size*image_size*hidden_dim+vocab_size
-                output_e = hidden_dim*2+max_decode_step+1+image_size*image_size*hidden_dim+vocab_size*(max_decode_step+1)
-                intervened_scores_batch = intervened_scores[:,output_s:output_e].reshape(cf_sample_per_batch, max_decode_step, -1)
-                #####################
-                #
-                # low data end
-                #
-                #####################
+                hidden, encoder_outputs = model(
+                    commands_input=input_batch, 
+                    commands_lengths=input_lengths_batch,
+                    tag="command_input_encode_no_dict"
+                )
+
+                main_hidden = model(
+                    command_hidden=hidden,
+                    tag="initialize_hidden"
+                )
+                projected_keys_visual = model(
+                    encoded_situations=encoded_image,
+                    tag="projected_keys_visual"
+                )
+                projected_keys_textual = model(
+                    command_encoder_outputs=encoder_outputs["encoder_outputs"],
+                    tag="projected_keys_textual"
+                )
+
+                # dual setup.
+                dual_input_batch = dual_input_batch[:,:dual_input_max_seq_lens]
+                dual_target_batch = dual_target_batch[:,:dual_target_max_seq_lens]
+                dual_encoded_image = model(
+                    situations_input=dual_situation_batch,
+                    tag="situation_encode"
+                )
+                dual_hidden, dual_encoder_outputs = model(
+                    commands_input=dual_input_batch, 
+                    commands_lengths=dual_input_lengths_batch,
+                    tag="command_input_encode_no_dict"
+                )
+
+                dual_hidden = model(
+                    command_hidden=dual_hidden,
+                    tag="initialize_hidden"
+                )
+                dual_projected_keys_visual = model(
+                    encoded_situations=dual_encoded_image,
+                    tag="projected_keys_visual"
+                )
+                dual_projected_keys_textual = model(
+                    command_encoder_outputs=dual_encoder_outputs["encoder_outputs"],
+                    tag="projected_keys_textual"
+                )
+
+                # get the intercepted dual hidden states.
+                for i in range(intervene_time):
+                    (_, dual_hidden) = model(
+                        lstm_input_tokens_sorted=dual_target_batch[:,i],
+                        lstm_hidden=dual_hidden,
+                        lstm_projected_keys_textual=dual_projected_keys_textual,
+                        lstm_commands_lengths=dual_input_lengths_batch,
+                        lstm_projected_keys_visual=dual_projected_keys_visual,
+                        tag="_lstm_step_fxn"
+                    )
+
+                # main intervene for loop.
+                cf_hidden = main_hidden
+                cf_outputs = []
+                for i in range(intervened_target_batch.shape[1]):
+                    if i == intervene_time:
+                        s_idx = intervene_attribute*25
+                        e_idx = intervene_attribute*25+25
+                        cf_hidden[0][:,s_idx:e_idx] = dual_hidden[0][:,s_idx:e_idx] # only swap out this part.
+                        (cf_output, cf_hidden) = model(
+                            lstm_input_tokens_sorted=intervened_target_batch[:,i],
+                            lstm_hidden=cf_hidden,
+                            lstm_projected_keys_textual=projected_keys_textual,
+                            lstm_commands_lengths=input_lengths_batch,
+                            lstm_projected_keys_visual=projected_keys_visual,
+                            tag="_lstm_step_fxn"
+                        )
+                    else:
+                        (cf_output, cf_hidden) = model(
+                            lstm_input_tokens_sorted=intervened_target_batch[:,i],
+                            lstm_hidden=cf_hidden,
+                            lstm_projected_keys_textual=projected_keys_textual,
+                            lstm_commands_lengths=input_lengths_batch,
+                            lstm_projected_keys_visual=projected_keys_visual,
+                            tag="_lstm_step_fxn"
+                        )
+                    # record the output for loss calculation.
+                    cf_output = cf_output.unsqueeze(0)
+                    cf_outputs += [cf_output]
+                cf_outputs = torch.cat(cf_outputs, dim=0)
+                intervened_scores_batch = cf_outputs.transpose(0, 1) # [batch_size, max_target_seq_length, target_vocabulary_size]
 
                 # Counterfactual loss
                 intervened_scores_batch = F.log_softmax(intervened_scores_batch, dim=-1)
                 cf_loss = model(
                     loss_target_scores=intervened_scores_batch, 
-                    loss_target_batch=intervened_target_batch[idx_selected],
+                    loss_target_batch=intervened_target_batch,
                     tag="loss"
                 )
                 if use_cuda and n_gpu > 1:
                     cf_loss = cf_loss.mean() # mean() to average on multi-gpu.
 
-            # Main task loss
-            '''
-            We calculate this loss using the pytorch module, 
-            as it is much quicker.
-            '''
-            forward_main_low = {
-                "commands_input": input_batch, 
-                "commands_lengths": input_lengths_batch,
-                "situations_input": situation_batch,
-                # these two fields need to be updated well.
-                "target_batch": target_batch,
-                "target_lengths": target_lengths_batch,
-            }
-            g_forward_main_low = GraphInput(forward_main_low, batched=True, batch_dim=0, cache_results=False)
-            target_scores = low_model.compute(g_forward_main_low)
-            main_loss = model(
-                loss_target_scores=target_scores, 
-                loss_target_batch=target_batch,
-                tag="loss"
-            )
-            
-            if use_cuda and n_gpu > 1:
-                main_loss = main_loss.mean() # mean() to average on multi-gpu.
-            # we need to average over actual length to get rid of padding losses.
-            # loss /= target_lengths_batch.sum()
-            if cf_loss:
-                loss = cf_loss + main_loss
+            #####################
+            #
+            # low data end
+            #
+            #####################  
+
+            # combined two losses.
+            if include_task_loss:
+                loss = task_loss
+                if include_cf_loss:
+                    loss += cf_loss
             else:
-                loss = main_loss
+                assert cf_loss != None
+                loss = cf_loss
+
             # Backward pass and update model parameters.
             loss.backward()
             optimizer.step()
@@ -620,21 +694,39 @@ def train(
             
             # Print current metrics.
             if training_iteration % print_every == 0:
+                if auxiliary_task:
+                    pass
+                else:
+                    auxiliary_accuracy_target = 0.
+                # main task evaluation
                 accuracy, exact_match = model(
                     loss_target_scores=target_scores, 
                     loss_target_batch=target_batch,
                     tag="get_metrics"
                 )
-                if auxiliary_task:
-                    pass
-                else:
-                    auxiliary_accuracy_target = 0.
+                # cf evaluation
+                cf_accuracy, cf_exact_match = model(
+                    loss_target_scores=intervened_scores_batch, 
+                    loss_target_batch=intervened_target_batch,
+                    tag="get_metrics"
+                )
                 learning_rate = scheduler.get_lr()[0]
-                logger.info("Iteration %08d, loss %8.4f, accuracy %5.2f, exact match %5.2f, learning_rate %.5f,"
-                            " aux. accuracy target pos %5.2f" % (training_iteration, loss, accuracy, exact_match,
-                                                                 learning_rate, auxiliary_accuracy_target))
-
+                logger.info("Iteration %08d, loss %8.4f, accuracy %5.2f, exact match %5.2f, "
+                            "cf count %03d, cf accuracy %5.2f, cf exact match %5.2f,"
+                            " learning_rate %.5f" % (
+                                training_iteration, loss, accuracy, exact_match,
+                                len(idx_selected), cf_accuracy, cf_exact_match,
+                                learning_rate,
+                            ))
+                
             # Evaluate on test set.
+            """
+            CAVEATS: we only evaluate with the main task loss for now.
+            It will take too long to evaluate counterfactually, so we
+            exclude it now from training.
+            
+            TODO: add back in the cf evaluation as well if it is efficient!
+            """
             if training_iteration % evaluate_every == 0:
                 with torch.no_grad():
                     model.eval()
