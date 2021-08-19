@@ -490,7 +490,7 @@ def train(
                 main_high_hidden = hi_model.compute_node(f"s{intervene_time}", g_main_high)
                 dual_high_hidden = hi_model.compute_node(f"s{intervene_time}", g_dual_high)
                 # only intervene on an selected attribute.
-                # main_high_hidden[:,:] = dual_high_hidden[:,:]
+                main_high_hidden[:,:] = dual_high_hidden[:,:]
                 high_interv = Intervention(
                     g_main_high, {f"s{intervene_time}": main_high_hidden}, 
                     cache_results=False,
@@ -515,6 +515,11 @@ def train(
                     else:
                         intervened_outputs.append(intervened_output[0,3].tolist())
 
+                # print("original: ", target_batch[i])
+                # print("dual: ", dual_target_batch[i])
+                # print("time: ", intervene_time)
+                # print(intervened_outputs)
+                        
             for i in range(batch_size):
                 # we need to pad to the longest ones.
                 intervened_target_batch[i] = torch.cat([
@@ -525,7 +530,7 @@ def train(
             intervened_target_batch = torch.stack(intervened_target_batch, dim=0)
             # we need to truncate if this is longer than the maximum target length
             # of original target length.
-
+            
             # intervened data.
             intervened_target_batch = intervened_target_batch.to(device)
             intervened_target_lengths_batch = intervened_target_lengths_batch.to(device)
