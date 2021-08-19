@@ -198,13 +198,13 @@ def counterfactual_predict(
     start_time = time.time()
 
     # Loop over the data.
-    i = 0
+    total_count = 0
     bad_count = 0
     for step, batch in enumerate(data_iterator):
         
-        i += 1
+        total_count += 1
         if max_examples_to_evaluate:
-            if i > max_examples_to_evaluate:
+            if total_count > max_examples_to_evaluate:
                 break
 
         # main batch
@@ -288,9 +288,9 @@ def counterfactual_predict(
                 batched=True
             )
             intervened_outputs = []
-            for i in range(0, eval_max_decoding_steps-2): # we only have this many steps can intervened.
-                _, intervened_output = hi_model.intervene_node(f"s{i+1}", high_interv)
-                if intervened_output[0,3] == 0 or i == eval_max_decoding_steps-3:
+            for j in range(0, eval_max_decoding_steps-2): # we only have this many steps can intervened.
+                _, intervened_output = hi_model.intervene_node(f"s{j+1}", high_interv)
+                if intervened_output[0,3] == 0 or j == eval_max_decoding_steps-3:
                     # we need to record the length and early stop
                     intervened_outputs = [1] + intervened_outputs + [2]
                     intervened_outputs = torch.tensor(intervened_outputs).long()

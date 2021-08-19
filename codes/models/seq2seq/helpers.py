@@ -147,7 +147,7 @@ def arg_parse():
     
     # Counterfactual arguments
     parser.add_argument("--cf_mode", type=str, default="random", help="What mode are you in for your counterfactual training.")
-    parser.add_argument("--run_name", type=str, default="")
+    parser.add_argument("--run_name", type=str, default="seq2seq")
     parser.add_argument("--cf_sample_p", type=float, default=0.25, help="Percentage of examples in a batch to include counterfactual loss")
     parser.add_argument("--checkpoint_save_every", type=int, default=2000)
     parser.add_argument("--evaluate_checkpoint", type=str, default="")
@@ -156,6 +156,8 @@ def arg_parse():
     parser.add_argument("--include_cf_loss", dest="include_cf_loss", default=False,
                         action="store_true", help="Whether to include counterfactual loss during counterfactual training")
     parser.add_argument("--cf_loss_weight", type=float, default=1.0, help="Weight of cf loss comparing to the task loss")
+    parser.add_argument("--is_wandb", dest="is_wandb", default=False,
+                        action="store_true", help="Whether to report metrics to weights and bias.")
     
     try:
         get_ipython().run_line_magic('matplotlib', 'inline')

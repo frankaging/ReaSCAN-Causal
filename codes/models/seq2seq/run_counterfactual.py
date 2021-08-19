@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[1]:
+# In[32]:
 
 
 import argparse
@@ -188,6 +188,7 @@ def evaluate(
 
 def train(
     data_path: str, 
+    args,
     data_directory: str, 
     generate_vocabularies: bool, 
     input_vocab_path: str,   
@@ -223,18 +224,22 @@ def train(
     attention_type: str, 
     k: int, 
     # counterfactual training arguments
+    run_name: str,
     cf_mode: str,
     cf_sample_p: float,
     checkpoint_save_every: int,
     include_cf_loss: bool,
     include_task_loss: bool,
+    cf_loss_weight: float,
+    is_wandb: bool,
     max_training_examples=None, 
     seed=42,
-    run_name="",
     **kwargs
 ):
+    
     # we at least need to have one kind of loss.
-    logger.info(f"LOSS CONFIG: include_task_loss={include_task_loss}, include_cf_loss={include_cf_loss}...")
+    logger.info(f"LOSS CONFIG: include_task_loss={include_task_loss}, "
+                f"include_cf_loss={include_cf_loss} with cf_loss_weight = {cf_loss_weight}...")
 
     assert include_cf_loss or include_task_loss
     cfg = locals().copy()
@@ -245,11 +250,22 @@ def train(
     
     from pathlib import Path
     # the output directory name is generated on-the-fly.
-    run_name = f"seq2seq_seed_{seed}_max-itr_{max_training_iterations}_cf-mode_{cf_mode}_cf-sample-p_{cf_sample_p}"
+    run_name = f"{run_name}_seed_{seed}_cf_loss_{include_cf_loss}_task_loss_{include_task_loss}_cf_weight_{cf_loss_weight}_cf_p_{cf_sample_p}"
     output_directory = os.path.join(output_directory, run_name)
     cfg["output_directory"] = output_directory
     logger.info(f"Create the output directory if not exist: {output_directory}")
     Path(output_directory).mkdir(parents=True, exist_ok=True)
+    
+    # initialize w&b in the beginning.
+    if is_wandb:
+        logger.warning("Enabling wandb for tensorboard logging...")
+        import wandb
+        run = wandb.init(
+            project="ReaSCAN-Causal", 
+            entity="wuzhengx",
+            name=run_name,
+        )
+        wandb.config.update(args)
     
     logger.info("Loading all data into memory...")
     logger.info(f"Reading dataset from file: {data_path}...")
@@ -371,7 +387,6 @@ def train(
     
     logger.info("Training starts..")
     training_iteration = start_iteration
-    cf_loss_weight = 0.5
     cf_sample_per_batch_in_percentage = cf_sample_p
     logger.info(f"Setting cf_sample_per_batch_in_percentage = {cf_sample_per_batch_in_percentage}")
     while training_iteration < max_training_iterations:
@@ -442,7 +457,7 @@ def train(
             input_max_seq_lens = max(input_lengths_batch)[0]
             target_max_seq_lens = max(target_lengths_batch)[0]
             dual_target_max_seq_lens = max(dual_target_lengths_batch)[0]
-            intervene_time = random.randint(1, min(target_max_seq_lens, dual_target_max_seq_lens)-1) # we get rid of SOS and EOS tokens
+            intervene_time = random.randint(1, min(min(input_lengths_batch)[0], min(dual_target_lengths_batch)[0])-2) # we get rid of SOS and EOS tokens
 
             #####################
             #
@@ -455,6 +470,7 @@ def train(
             intervened_target_batch = []
             intervened_target_lengths_batch = []
             cf_sample_per_batch = int(batch_size*cf_sample_per_batch_in_percentage)
+
             for i in range(batch_size):
                 ## main
                 main_high = {
@@ -474,7 +490,7 @@ def train(
                 main_high_hidden = hi_model.compute_node(f"s{intervene_time}", g_main_high)
                 dual_high_hidden = hi_model.compute_node(f"s{intervene_time}", g_dual_high)
                 # only intervene on an selected attribute.
-                main_high_hidden[:,intervene_attribute] = dual_high_hidden[:,intervene_attribute]
+                # main_high_hidden[:,:] = dual_high_hidden[:,:]
                 high_interv = Intervention(
                     g_main_high, {f"s{intervene_time}": main_high_hidden}, 
                     cache_results=False,
@@ -482,9 +498,9 @@ def train(
                     batched=True
                 )
                 intervened_outputs = []
-                for i in range(0, train_max_decoding_steps-2): # we only have this many steps can intervened.
-                    _, intervened_output = hi_model.intervene_node(f"s{i+1}", high_interv)
-                    if intervened_output[0,3] == 0 or i == train_max_decoding_steps-3:
+                for j in range(0, train_max_decoding_steps-2): # we only have this many steps can intervened.
+                    _, intervened_output = hi_model.intervene_node(f"s{j+1}", high_interv)
+                    if intervened_output[0,3] == 0 or j == train_max_decoding_steps-3:
                         # we need to record the length and early stop
                         intervened_outputs = [1] + intervened_outputs + [2]
                         intervened_outputs = torch.tensor(intervened_outputs).long()
@@ -548,6 +564,7 @@ def train(
 
             # Let us get rid of antra, using a very simple for loop
             # to do this intervention.
+            idx_selected = []
             if len(idx_generator) > 0:
                 # overwrite a bit.
                 cf_sample_per_batch = min(cf_sample_per_batch, len(idx_generator))
@@ -616,9 +633,9 @@ def train(
                 )
 
                 # get the intercepted dual hidden states.
-                for i in range(intervene_time):
+                for j in range(intervene_time):
                     (_, dual_hidden) = model(
-                        lstm_input_tokens_sorted=dual_target_batch[:,i],
+                        lstm_input_tokens_sorted=dual_target_batch[:,j],
                         lstm_hidden=dual_hidden,
                         lstm_projected_keys_textual=dual_projected_keys_textual,
                         lstm_commands_lengths=dual_input_lengths_batch,
@@ -629,22 +646,23 @@ def train(
                 # main intervene for loop.
                 cf_hidden = main_hidden
                 cf_outputs = []
-                for i in range(intervened_target_batch.shape[1]):
-                    if i == intervene_time:
-                        s_idx = intervene_attribute*25
-                        e_idx = intervene_attribute*25+25
-                        cf_hidden[0][:,s_idx:e_idx] = dual_hidden[0][:,s_idx:e_idx] # only swap out this part.
-                        (cf_output, cf_hidden) = model(
-                            lstm_input_tokens_sorted=intervened_target_batch[:,i],
-                            lstm_hidden=cf_hidden,
-                            lstm_projected_keys_textual=projected_keys_textual,
-                            lstm_commands_lengths=input_lengths_batch,
-                            lstm_projected_keys_visual=projected_keys_visual,
+                for j in range(intervened_target_batch.shape[1]):
+                    if j >= intervene_time:
+                        # s_idx = intervene_attribute*25
+                        # e_idx = intervene_attribute*25+25
+                        # cf_hidden[0][:,s_idx:e_idx] = dual_hidden[0][:,s_idx:e_idx] # only swap out this part.
+                        # cf_hidden[1][:,s_idx:e_idx] = dual_hidden[1][:,s_idx:e_idx] # only swap out this part.
+                        (cf_output, dual_hidden) = model(
+                            lstm_input_tokens_sorted=intervened_target_batch[:,j],
+                            lstm_hidden=dual_hidden,
+                            lstm_projected_keys_textual=dual_projected_keys_textual,
+                            lstm_commands_lengths=dual_input_lengths_batch,
+                            lstm_projected_keys_visual=dual_projected_keys_visual,
                             tag="_lstm_step_fxn"
                         )
                     else:
                         (cf_output, cf_hidden) = model(
-                            lstm_input_tokens_sorted=intervened_target_batch[:,i],
+                            lstm_input_tokens_sorted=intervened_target_batch[:,j],
                             lstm_hidden=cf_hidden,
                             lstm_projected_keys_textual=projected_keys_textual,
                             lstm_commands_lengths=input_lengths_batch,
@@ -677,7 +695,8 @@ def train(
             if include_task_loss:
                 loss = task_loss
                 if include_cf_loss:
-                    loss += cf_loss
+                    if cf_loss:
+                        loss += cf_loss_weight*cf_loss
             else:
                 assert cf_loss != None
                 loss = cf_loss
@@ -705,20 +724,34 @@ def train(
                     tag="get_metrics"
                 )
                 # cf evaluation
-                cf_accuracy, cf_exact_match = model(
-                    loss_target_scores=intervened_scores_batch, 
-                    loss_target_batch=intervened_target_batch,
-                    tag="get_metrics"
-                )
+                if cf_loss:
+                    cf_accuracy, cf_exact_match = model(
+                        loss_target_scores=intervened_scores_batch, 
+                        loss_target_batch=intervened_target_batch,
+                        tag="get_metrics"
+                    )
+                else:
+                    cf_loss, cf_accuracy, cf_exact_match = 0.0, 0.0, 0.0
                 learning_rate = scheduler.get_lr()[0]
-                logger.info("Iteration %08d, loss %8.4f, accuracy %5.2f, exact match %5.2f, "
+                logger.info("Iteration %08d, task loss %8.4f, cf loss %8.4f, accuracy %5.2f, exact match %5.2f, "
                             "cf count %03d, cf accuracy %5.2f, cf exact match %5.2f,"
                             " learning_rate %.5f" % (
-                                training_iteration, loss, accuracy, exact_match,
+                                training_iteration, task_loss, cf_loss, accuracy, exact_match,
                                 len(idx_selected), cf_accuracy, cf_exact_match,
                                 learning_rate,
                             ))
-                
+                # logging to wandb.
+                if is_wandb:
+                    wandb.log({'training_iteration': training_iteration})
+                    wandb.log({'task_loss': task_loss})
+                    wandb.log({'task_accuracy': accuracy})
+                    wandb.log({'task_exact_match': exact_match})
+                    if cf_loss and len(idx_selected) != 0:
+                        wandb.log({'counterfactual_loss': cf_loss})
+                        wandb.log({'counterfactual count': len(idx_selected)})
+                        wandb.log({'counterfactual_accuracy': cf_accuracy})
+                        wandb.log({'counterfactual_exact_match': cf_exact_match})
+                    wandb.log({'learning_rate': learning_rate})
             # Evaluate on test set.
             """
             CAVEATS: we only evaluate with the main task loss for now.
@@ -762,10 +795,10 @@ def train(
                 break
 
 
-# In[5]:
+# In[1]:
 
 
-def main(flags):
+def main(flags, args):
     
     logger = logging.getLogger(__name__)
     logger.setLevel(logging.INFO)
@@ -789,7 +822,7 @@ def main(flags):
     assert os.path.exists(data_path), "Trying to read a gSCAN dataset from a non-existing file {}.".format(
         data_path)
     if flags["mode"] == "train":
-        train(data_path=data_path, **flags)  
+        train(data_path=data_path, args=args, **flags)  
 
 
 # In[ ]:
@@ -811,5 +844,5 @@ if __name__ == "__main__":
         is_jupyter = False
     
     input_flags = vars(args)
-    main(flags=input_flags)
+    main(input_flags, args)
 
