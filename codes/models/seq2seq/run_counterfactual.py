@@ -490,7 +490,7 @@ def train(
                 main_high_hidden = hi_model.compute_node(f"s{intervene_time}", g_main_high)
                 dual_high_hidden = hi_model.compute_node(f"s{intervene_time}", g_dual_high)
                 # only intervene on an selected attribute.
-                main_high_hidden[:,:] = dual_high_hidden[:,:]
+                main_high_hidden[:,intervene_attribute] = dual_high_hidden[:,intervene_attribute]
                 high_interv = Intervention(
                     g_main_high, {f"s{intervene_time}": main_high_hidden}, 
                     cache_results=False,
@@ -652,28 +652,19 @@ def train(
                 cf_hidden = main_hidden
                 cf_outputs = []
                 for j in range(intervened_target_batch.shape[1]):
-                    if j >= intervene_time:
-                        # s_idx = intervene_attribute*25
-                        # e_idx = intervene_attribute*25+25
-                        # cf_hidden[0][:,s_idx:e_idx] = dual_hidden[0][:,s_idx:e_idx] # only swap out this part.
-                        # cf_hidden[1][:,s_idx:e_idx] = dual_hidden[1][:,s_idx:e_idx] # only swap out this part.
-                        (cf_output, dual_hidden) = model(
-                            lstm_input_tokens_sorted=intervened_target_batch[:,j],
-                            lstm_hidden=dual_hidden,
-                            lstm_projected_keys_textual=dual_projected_keys_textual,
-                            lstm_commands_lengths=dual_input_lengths_batch,
-                            lstm_projected_keys_visual=dual_projected_keys_visual,
-                            tag="_lstm_step_fxn"
-                        )
-                    else:
-                        (cf_output, cf_hidden) = model(
-                            lstm_input_tokens_sorted=intervened_target_batch[:,j],
-                            lstm_hidden=cf_hidden,
-                            lstm_projected_keys_textual=projected_keys_textual,
-                            lstm_commands_lengths=input_lengths_batch,
-                            lstm_projected_keys_visual=projected_keys_visual,
-                            tag="_lstm_step_fxn"
-                        )
+                    # intercept like antra!
+                    if j = intervene_time:
+                        s_idx = intervene_attribute*25
+                        e_idx = intervene_attribute*25+25
+                        cf_hidden[0][:,s_idx:e_idx] = dual_hidden[0][:,s_idx:e_idx] # only swap out this part.
+                    (cf_output, cf_hidden) = model(
+                        lstm_input_tokens_sorted=intervened_target_batch[:,j],
+                        lstm_hidden=cf_hidden,
+                        lstm_projected_keys_textual=projected_keys_textual,
+                        lstm_commands_lengths=input_lengths_batch,
+                        lstm_projected_keys_visual=projected_keys_visual,
+                        tag="_lstm_step_fxn"
+                    )
                     # record the output for loss calculation.
                     cf_output = cf_output.unsqueeze(0)
                     cf_outputs += [cf_output]
@@ -698,6 +689,7 @@ def train(
 
             # combined two losses.
             if include_task_loss:
+                task_loss_to_write = task_loss.clone()
                 loss = task_loss
                 if include_cf_loss:
                     if cf_loss:
@@ -741,14 +733,14 @@ def train(
                 logger.info("Iteration %08d, task loss %8.4f, cf loss %8.4f, accuracy %5.2f, exact match %5.2f, "
                             "cf count %03d, cf accuracy %5.2f, cf exact match %5.2f,"
                             " learning_rate %.5f" % (
-                                training_iteration, task_loss, cf_loss, accuracy, exact_match,
+                                training_iteration, task_loss_to_write, cf_loss, accuracy, exact_match,
                                 len(idx_selected), cf_accuracy, cf_exact_match,
                                 learning_rate,
                             ))
                 # logging to wandb.
                 if is_wandb:
                     wandb.log({'training_iteration': training_iteration})
-                    wandb.log({'task_loss': task_loss})
+                    wandb.log({'task_loss': task_loss_to_write})
                     wandb.log({'task_accuracy': accuracy})
                     wandb.log({'task_exact_match': exact_match})
                     if cf_loss and len(idx_selected) != 0:
