@@ -181,7 +181,8 @@ def counterfactual_predict(
     sos_idx,
     eos_idx, 
     max_examples_to_evaluate,
-    device
+    device,
+    intervene_attribute=-1,
 ) -> torch.Tensor:
     """
     Loop over all data in data_iterator and predict until <EOS> token is reached.
@@ -247,10 +248,12 @@ def counterfactual_predict(
         input_max_seq_lens = max(input_lengths_batch)[0]
         target_max_seq_lens = max(target_lengths_batch)[0]
         dual_target_max_seq_lens = max(dual_target_lengths_batch)[0]
-        intervene_attribute = random.choice([0,1,2])
+        if intervene_attribute == -1:
+            intervene_attribute = random.choice([0,1,2])
+
         min_len = min(target_max_seq_lens, dual_target_max_seq_lens)
-        intervene_time = random.randint(1, min_len-1) # we get rid of SOS and EOS tokens
-        
+        intervene_time = random.randint(1, min(min(input_lengths_batch)[0], min(dual_target_lengths_batch)[0])-2) # we get rid of SOS and EOS tokens
+        intervene_time = 1 # use fixed time.
         #####################
         #
         # high data start
@@ -430,24 +433,16 @@ def counterfactual_predict(
                 s_idx = intervene_attribute*25
                 e_idx = intervene_attribute*25+25
                 cf_hidden[0][:,s_idx:e_idx] = dual_hidden[0][:,s_idx:e_idx] # only swap out this part.
-                # injection here.
-                (cf_output, cf_hidden) = model(
-                    lstm_input_tokens_sorted=cf_token,
-                    lstm_hidden=cf_hidden,
-                    lstm_projected_keys_textual=projected_keys_textual,
-                    lstm_commands_lengths=input_lengths_batch,
-                    lstm_projected_keys_visual=projected_keys_visual,
-                    tag="_lstm_step_fxn"
-                )
-            else:
-                (cf_output, cf_hidden) = model(
-                    lstm_input_tokens_sorted=cf_token,
-                    lstm_hidden=cf_hidden,
-                    lstm_projected_keys_textual=projected_keys_textual,
-                    lstm_commands_lengths=input_lengths_batch,
-                    lstm_projected_keys_visual=projected_keys_visual,
-                    tag="_lstm_step_fxn"
-                )
+                # comment this out for non-strong causual models
+                # cf_hidden[1][:,s_idx:e_idx] = dual_hidden[1][:,s_idx:e_idx] # only swap out this part.
+            (cf_output, cf_hidden) = model(
+                lstm_input_tokens_sorted=cf_token,
+                lstm_hidden=cf_hidden,
+                lstm_projected_keys_textual=projected_keys_textual,
+                lstm_commands_lengths=input_lengths_batch,
+                lstm_projected_keys_visual=projected_keys_visual,
+                tag="_lstm_step_fxn"
+            )
             cf_output = F.log_softmax(cf_output, dim=-1)
             cf_token = cf_output.max(dim=-1)[1]
             output_sequence.append(cf_token.data[0].item())
@@ -481,6 +476,7 @@ def predict_and_save(
     device,
     max_testing_examples=None, 
     counterfactual_evaluate=False,
+    intervene_attribute=-1,
     **kwargs
 ):
     """
@@ -493,7 +489,6 @@ def predict_and_save(
     """
     cfg = locals().copy()
 
-    
     # read-in datasets
     test_data, _ = dataset.get_dual_dataset()
     data_iterator = DataLoader(test_data, batch_size=1, shuffle=False)
@@ -509,7 +504,6 @@ def predict_and_save(
             #################
             exact_match_count = 0
             example_count = 0
-            i = 0
             for input_sequence, output_sequence, target_sequence, aux_acc_target in predict(
                     data_iterator=data_iterator, model=model, 
                     max_decoding_steps=max_decoding_steps, 
@@ -519,7 +513,6 @@ def predict_and_save(
                     max_examples_to_evaluate=max_testing_examples, 
                     device=device
             ):
-                i += 1
                 example_count += 1
                 accuracy = sequence_accuracy(output_sequence, target_sequence[0].tolist()[1:-1])
                 input_str_sequence = dataset.array_to_sentence(input_sequence[0].tolist(), vocabulary="input")
@@ -537,7 +530,7 @@ def predict_and_save(
             exact_match = (exact_match_count/example_count)*100.0
             logger.info(" Task Evaluation Exact Match: %5.2f " % (exact_match))
             if not counterfactual_evaluate:
-                logger.info("Wrote predictions for {} examples.".format(i))
+                logger.info("Wrote predictions for {} examples.".format(example_count))
                 json.dump(output, outfile, indent=4)
                 return output_file_path
 
@@ -558,9 +551,9 @@ def predict_and_save(
                     sos_idx=dataset.target_vocabulary.sos_idx, 
                     eos_idx=dataset.target_vocabulary.eos_idx, 
                     max_examples_to_evaluate=max_testing_examples, 
-                    device=device
+                    device=device,
+                    intervene_attribute=intervene_attribute,
             ):
-                i += 1
                 example_count += 1
                 accuracy = sequence_accuracy(output_sequence, target_sequence[0].tolist()[1:-1])
                 input_str_sequence = dataset.array_to_sentence(input_sequence[0].tolist(), vocabulary="input")
@@ -586,8 +579,8 @@ def predict_and_save(
                                "accuracy": accuracy,
                                "exact_match": True if accuracy == 100 else False,
                                "position_accuracy": aux_acc_target})
-
-            logger.info("Wrote predictions for {} examples including counterfactual ones.".format(i))
+            print(example_count)
+            logger.info("Wrote predictions for {} examples including counterfactual ones.".format(example_count))
             json.dump(output, outfile, indent=4)
             exact_match = (exact_match_count/example_count)*100.0
             logger.info(" Counterfactual Evaluation Exact Match: %5.2f " % (exact_match))
@@ -711,6 +704,19 @@ def main(flags):
             output_file_name = "_".join([split, flags["output_file_name"]])
             output_file_path = os.path.join(flags["resume_from_file"], output_file_name)
             logger.info("All results will be saved to '{}'".format(output_file_path))
+            if flags["intervene_attribute"] == "all":
+                intervene_attribute = -1
+            else:
+                if flags["intervene_attribute"] == "x":
+                    flags["intervene_attribute"] = 0
+                elif flags["intervene_attribute"] == "y":
+                    flags["intervene_attribute"] = 1
+                elif flags["intervene_attribute"] == "o":
+                    flags["intervene_attribute"] = 2
+                else:
+                    flags["intervene_attribute"] = -1
+                    # assert False f"Your intervene attribute {flags["intervene_attribute"]} is unknown."
+            
             output_file = predict_and_save(
                 dataset=test_set, 
                 model=model, low_model=low_model, low_model_cf=low_model_cf, hi_model=hi_model,

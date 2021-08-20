@@ -124,7 +124,7 @@ class Attention(nn.Module):
         # [bsz, 1, query_dim] X [bsz, query_dim, num_memory] = [bsz, num_memory, 1]
         scores = self.energy_layer(torch.tanh(queries + projected_keys))
         scores = scores.squeeze(2).unsqueeze(1)
-        
+
         max_len = max(memory_lengths)[0].tolist()
         # we need to check if the batch recieved in this device is actually smaller.
         if max_len < scores.shape[-1]:
@@ -136,6 +136,7 @@ class Attention(nn.Module):
         
         # Mask out keys that are on a padding location.encoded_commands
         mask = mask.unsqueeze(1)  # [batch_size, 1, num_memory]
+        
         scores = scores.masked_fill(mask == 0, float('-inf'))  # fill with large negative numbers
         attention_weights = F.softmax(scores, dim=2)  # [batch_size, 1, num_memory]
 

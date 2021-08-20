@@ -371,18 +371,17 @@ def train(
          is_cf=False,
          cache_results=False
     )
-    low_model_cf = ReaSCANMultiModalLSTMCompGraph(
-         model,
-         train_max_decoding_steps,
-         is_cf=True,
-         cache_results=False
-    )
 
     # create high level model for counterfactual training.
-    hi_model = get_counter_compgraph(
-        train_max_decoding_steps,
-        cache_results=False
+    # WARNING: we are not using antra for high model.
+    # hi_model = get_counter_compgraph(
+    #     train_max_decoding_steps,
+    #     cache_results=False
+    # )
+    hi_model = HighLevelModel(
+        # None
     )
+    hi_model.to(device)
     logger.info("Finish loading both low and high models..")
     
     logger.info("Training starts..")
@@ -458,7 +457,7 @@ def train(
             target_max_seq_lens = max(target_lengths_batch)[0]
             dual_target_max_seq_lens = max(dual_target_lengths_batch)[0]
             intervene_time = random.randint(1, min(min(input_lengths_batch)[0], min(dual_target_lengths_batch)[0])-2) # we get rid of SOS and EOS tokens
-
+            # intervene_time = 1
             #####################
             #
             # high data start
@@ -471,70 +470,77 @@ def train(
             intervened_target_lengths_batch = []
             cf_sample_per_batch = int(batch_size*cf_sample_per_batch_in_percentage)
 
-            for i in range(batch_size):
-                ## main
-                main_high = {
-                    "agent_positions_batch": agent_positions_batch[i:i+1].unsqueeze(dim=-1),
-                    "target_positions_batch": target_positions_batch[i:i+1].unsqueeze(dim=-1),
-                }
-                g_main_high = GraphInput(main_high, batched=True, batch_dim=0, cache_results=False)
-                ## dual
-                dual_high = {
-                    "agent_positions_batch": dual_agent_positions_batch[i:i+1].unsqueeze(dim=-1),
-                    "target_positions_batch": dual_target_positions_batch[i:i+1].unsqueeze(dim=-1),
-                }
-                g_dual_high = GraphInput(dual_high, batched=True, batch_dim=0, cache_results=False)
-                dual_target_length = dual_target_lengths_batch[i][0].tolist()
-
-                # get the duel high state
-                main_high_hidden = hi_model.compute_node(f"s{intervene_time}", g_main_high)
-                dual_high_hidden = hi_model.compute_node(f"s{intervene_time}", g_dual_high)
-                # only intervene on an selected attribute.
-                main_high_hidden[:,intervene_attribute] = dual_high_hidden[:,intervene_attribute]
-                high_interv = Intervention(
-                    g_main_high, {f"s{intervene_time}": main_high_hidden}, 
-                    cache_results=False,
-                    cache_base_results=False,
-                    batched=True
-                )
-                intervened_outputs = []
-                for j in range(0, train_max_decoding_steps-2): # we only have this many steps can intervened.
-                    _, intervened_output = hi_model.intervene_node(f"s{j+1}", high_interv)
-                    if intervened_output[0,3] == 0 or j == train_max_decoding_steps-3:
-                        # we need to record the length and early stop
-                        intervened_outputs = [1] + intervened_outputs + [2]
-                        intervened_outputs = torch.tensor(intervened_outputs).long()
-                        intervened_length = len(intervened_outputs)
-                        # we need to confine the longest length!
-                        if intervened_length > train_max_decoding_steps:
-                            intervened_length = train_max_decoding_steps
-                            intervened_outputs = intervened_outputs[:train_max_decoding_steps]
-                        intervened_target_batch += [intervened_outputs]
-                        intervened_target_lengths_batch += [intervened_length]
-                        break
-                    else:
-                        intervened_outputs.append(intervened_output[0,3].tolist())
-
-                # print("original: ", target_batch[i])
-                # print("dual: ", dual_target_batch[i])
-                # print("time: ", intervene_time)
-                # print(intervened_outputs)
-                        
-            for i in range(batch_size):
-                # we need to pad to the longest ones.
-                intervened_target_batch[i] = torch.cat([
-                    intervened_target_batch[i],
-                    torch.zeros(int(train_max_decoding_steps-intervened_target_lengths_batch[i]), dtype=torch.long)], dim=0
-                )
-            intervened_target_lengths_batch = torch.tensor(intervened_target_lengths_batch).long().unsqueeze(dim=-1)
-            intervened_target_batch = torch.stack(intervened_target_batch, dim=0)
-            # we need to truncate if this is longer than the maximum target length
-            # of original target length.
+            high_hidden_states = hi_model(
+                agent_positions_batch=agent_positions_batch.unsqueeze(dim=-1), 
+                target_positions_batch=target_positions_batch.unsqueeze(dim=-1), 
+                tag="situation_encode"
+            )
+            high_actions = torch.zeros(
+                high_hidden_states.size(0), 1
+            ).long().to(device)
             
-            # intervened data.
-            intervened_target_batch = intervened_target_batch.to(device)
-            intervened_target_lengths_batch = intervened_target_lengths_batch.to(device)
+            dual_high_hidden_states = hi_model(
+                agent_positions_batch=dual_agent_positions_batch.unsqueeze(dim=-1), 
+                target_positions_batch=dual_target_positions_batch.unsqueeze(dim=-1), 
+                tag="situation_encode"
+            )
+            dual_high_actions = torch.zeros(
+                dual_high_hidden_states.size(0), 1
+            ).long().to(device)
+        
+            # get the intercepted dual hidden states.
+            for j in range(intervene_time):
+                dual_high_hidden_states, dual_high_actions = hi_model(
+                    hmm_states=dual_high_hidden_states, 
+                    hmm_actions=dual_high_actions, 
+                    tag="_hmm_step_fxn"
+                )
 
+            # main intervene for loop.
+            cf_high_hidden_states = high_hidden_states
+            cf_high_actions = high_actions
+            intervened_target_batch = [torch.ones(high_hidden_states.size(0), 1).long().to(device)] # SOS tokens
+            intervened_target_lengths_batch = torch.zeros(high_hidden_states.size(0), 1).long().to(device)
+            # we need to take of the SOS and EOS tokens.
+            for j in range(train_max_decoding_steps-2):
+                # intercept like antra!
+                if j == intervene_time:
+                    # only swap out this part.
+                    # comment out two lines below if it is not for testing.
+                    # cf_high_hidden_states = dual_high_hidden_states
+                    # cf_high_actions = dual_high_actions
+                    cf_high_hidden_states[:,intervene_attribute] = dual_high_hidden_states[:,intervene_attribute]
+                cf_high_hidden_states, cf_high_actions = hi_model(
+                    hmm_states=cf_high_hidden_states, 
+                    hmm_actions=cf_high_actions, 
+                    tag="_hmm_step_fxn"
+                )
+                # record the output for loss calculation.
+                intervened_target_batch += [cf_high_actions]
+                intervened_target_lengths_batch += (cf_high_actions!=0).long()
+            intervened_target_batch += [torch.ones(high_hidden_states.size(0), 1).long().to(device)] # pad for extra eos
+            intervened_target_lengths_batch += 2
+            intervened_target_batch = torch.cat(intervened_target_batch, dim=-1)
+            for i in range(high_hidden_states.size(0)):
+                intervened_target_batch[i,intervened_target_lengths_batch[i,0]-1] = 2
+            # intervened data.
+            intervened_target_batch = intervened_target_batch.clone()
+            intervened_target_lengths_batch = intervened_target_lengths_batch.clone()
+            # intervened_target_batch = dual_target_batch.clone()
+            # intervened_target_lengths_batch = dual_target_lengths_batch.clone()
+            # print(intervened_target_batch.shape)
+            # print(max(intervened_target_lengths_batch))
+            # correct the length.
+            intervened_target_lengths_batch[intervened_target_lengths_batch>train_max_decoding_steps] = train_max_decoding_steps
+
+            # DEBUG.
+            # for i in range(intervened_target_batch.size(0)):
+            #     print("original: ", target_batch[i])
+            #     print("dual: ", dual_target_batch[i])
+            #     print("time: ", intervene_time)
+            #     print("intervened: ", intervened_target_batch[i])
+            #     print("intervened length: ", intervened_target_lengths_batch[i])
+            #     print("===")
             #####################
             #
             # high data end
@@ -586,7 +592,7 @@ def train(
                 dual_target_batch = dual_target_batch[idx_selected]
                 intervened_target_lengths_batch = intervened_target_lengths_batch[idx_selected]
                 intervened_target_batch = intervened_target_batch[idx_selected]
-
+                
                 # we use the main hidden to track.
                 encoded_image = model(
                     situations_input=situation_batch,
@@ -647,16 +653,20 @@ def train(
                         lstm_projected_keys_visual=dual_projected_keys_visual,
                         tag="_lstm_step_fxn"
                     )
-
+                
                 # main intervene for loop.
                 cf_hidden = main_hidden
                 cf_outputs = []
                 for j in range(intervened_target_batch.shape[1]):
                     # intercept like antra!
-                    if j = intervene_time:
+                    if j == intervene_time:
                         s_idx = intervene_attribute*25
                         e_idx = intervene_attribute*25+25
                         cf_hidden[0][:,s_idx:e_idx] = dual_hidden[0][:,s_idx:e_idx] # only swap out this part.
+                        # really strong causal!
+                        # cf_hidden[1][:,s_idx:e_idx] = dual_hidden[1][:,s_idx:e_idx] # only swap out this part.
+                        # projected_keys_textual[:,s_idx:e_idx] = dual_projected_keys_textual[:,s_idx:e_idx]
+                        # projected_keys_visual[:,s_idx:e_idx] = dual_projected_keys_visual[:,s_idx:e_idx]
                     (cf_output, cf_hidden) = model(
                         lstm_input_tokens_sorted=intervened_target_batch[:,j],
                         lstm_hidden=cf_hidden,
@@ -670,7 +680,7 @@ def train(
                     cf_outputs += [cf_output]
                 cf_outputs = torch.cat(cf_outputs, dim=0)
                 intervened_scores_batch = cf_outputs.transpose(0, 1) # [batch_size, max_target_seq_length, target_vocabulary_size]
-
+                
                 # Counterfactual loss
                 intervened_scores_batch = F.log_softmax(intervened_scores_batch, dim=-1)
                 cf_loss = model(
