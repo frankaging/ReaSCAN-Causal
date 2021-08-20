@@ -388,6 +388,8 @@ def train(
     training_iteration = start_iteration
     cf_sample_per_batch_in_percentage = cf_sample_p
     logger.info(f"Setting cf_sample_per_batch_in_percentage = {cf_sample_per_batch_in_percentage}")
+    intervene_time_record = []
+    intervene_attr_record = []
     while training_iteration < max_training_iterations:
 
         # Shuffle the dataset and loop over it.
@@ -758,6 +760,14 @@ def train(
                         wandb.log({'counterfactual count': len(idx_selected)})
                         wandb.log({'counterfactual_accuracy': cf_accuracy})
                         wandb.log({'counterfactual_exact_match': cf_exact_match})
+                        intervene_time_record += [[intervene_time]]
+                        intervene_attr_record += [[intervene_attribute]]
+                        time_table = wandb.Table(data=intervene_time_record, columns=["intervene_time"])
+                        wandb.log({'intervene_time_dist': wandb.plot.histogram(time_table, "intervene_time",
+                                                   title="Histogram")})
+                        attr_table = wandb.Table(data=intervene_attr_record, columns=["intervene_attr"])
+                        wandb.log({'intervene_attr_dist': wandb.plot.histogram(attr_table, "intervene_attr",
+                                                   title="Histogram")})
                     wandb.log({'learning_rate': learning_rate})
             # Evaluate on test set.
             """
