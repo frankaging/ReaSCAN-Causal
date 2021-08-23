@@ -40,6 +40,8 @@ def log_parameters(model: torch.nn.Module) -> {}:
 
 
 def sequence_accuracy(prediction: List[int], target: List[int]) -> float:
+    # print("****", prediction)
+    # print("****", target)
     correct = 0
     total = 0
     prediction = prediction.copy()

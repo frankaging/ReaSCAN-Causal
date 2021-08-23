@@ -390,6 +390,8 @@ def train(
     logger.info(f"Setting cf_sample_per_batch_in_percentage = {cf_sample_per_batch_in_percentage}")
     intervene_time_record = []
     intervene_attr_record = []
+    time_cross_match_record = []
+    attr_cross_match_record = []
     while training_iteration < max_training_iterations:
 
         # Shuffle the dataset and loop over it.
@@ -458,8 +460,7 @@ def train(
             input_max_seq_lens = max(input_lengths_batch)[0]
             target_max_seq_lens = max(target_lengths_batch)[0]
             dual_target_max_seq_lens = max(dual_target_lengths_batch)[0]
-            intervene_time = random.randint(1, min(min(input_lengths_batch)[0], min(dual_target_lengths_batch)[0])-2) # we get rid of SOS and EOS tokens
-            # intervene_time = 1
+            intervene_time = random.randint(1, min(min(target_lengths_batch)[0], min(dual_target_lengths_batch)[0])-1) # we get rid of SOS and EOS tokens
             #####################
             #
             # high data start
@@ -504,14 +505,19 @@ def train(
             intervened_target_batch = [torch.ones(high_hidden_states.size(0), 1).long().to(device)] # SOS tokens
             intervened_target_lengths_batch = torch.zeros(high_hidden_states.size(0), 1).long().to(device)
             # we need to take of the SOS and EOS tokens.
-            for j in range(train_max_decoding_steps-2):
+            for j in range(train_max_decoding_steps-1):
                 # intercept like antra!
                 if j == intervene_time:
                     # only swap out this part.
+                    cf_high_hidden_states[:,intervene_attribute] = dual_high_hidden_states[:,intervene_attribute]
+                    # WARNING: we also reinit the action state!
+                    # this ensures that our main task training objective is not disordered?
+                    cf_high_actions = torch.zeros(
+                        dual_high_hidden_states.size(0), 1
+                    ).long().to(device)
                     # comment out two lines below if it is not for testing.
                     # cf_high_hidden_states = dual_high_hidden_states
                     # cf_high_actions = dual_high_actions
-                    cf_high_hidden_states[:,intervene_attribute] = dual_high_hidden_states[:,intervene_attribute]
                 cf_high_hidden_states, cf_high_actions = hi_model(
                     hmm_states=cf_high_hidden_states, 
                     hmm_actions=cf_high_actions, 
@@ -520,18 +526,18 @@ def train(
                 # record the output for loss calculation.
                 intervened_target_batch += [cf_high_actions]
                 intervened_target_lengths_batch += (cf_high_actions!=0).long()
-            intervened_target_batch += [torch.ones(high_hidden_states.size(0), 1).long().to(device)] # pad for extra eos
             intervened_target_lengths_batch += 2
+            # we do not to increase the EOS for non-ending sequences
+            for i in range(high_hidden_states.size(0)):
+                if intervened_target_lengths_batch[i,0] == train_max_decoding_steps+1:
+                    intervened_target_lengths_batch[i,0] = train_max_decoding_steps
             intervened_target_batch = torch.cat(intervened_target_batch, dim=-1)
             for i in range(high_hidden_states.size(0)):
-                intervened_target_batch[i,intervened_target_lengths_batch[i,0]-1] = 2
+                if intervened_target_batch[i,intervened_target_lengths_batch[i,0]-1] == 0:
+                    intervened_target_batch[i,intervened_target_lengths_batch[i,0]-1] = 2
             # intervened data.
             intervened_target_batch = intervened_target_batch.clone()
             intervened_target_lengths_batch = intervened_target_lengths_batch.clone()
-            # intervened_target_batch = dual_target_batch.clone()
-            # intervened_target_lengths_batch = dual_target_lengths_batch.clone()
-            # print(intervened_target_batch.shape)
-            # print(max(intervened_target_lengths_batch))
             # correct the length.
             intervened_target_lengths_batch[intervened_target_lengths_batch>train_max_decoding_steps] = train_max_decoding_steps
 
@@ -647,7 +653,7 @@ def train(
 
                 # get the intercepted dual hidden states.
                 for j in range(intervene_time):
-                    (_, dual_hidden) = model(
+                    (dual_output, dual_hidden) = model(
                         lstm_input_tokens_sorted=dual_target_batch[:,j],
                         lstm_hidden=dual_hidden,
                         lstm_projected_keys_textual=dual_projected_keys_textual,
@@ -660,17 +666,19 @@ def train(
                 cf_hidden = main_hidden
                 cf_outputs = []
                 for j in range(intervened_target_batch.shape[1]):
+                    cf_token=intervened_target_batch[:,j]
                     # intercept like antra!
                     if j == intervene_time:
                         s_idx = intervene_attribute*25
                         e_idx = intervene_attribute*25+25
                         cf_hidden[0][:,s_idx:e_idx] = dual_hidden[0][:,s_idx:e_idx] # only swap out this part.
-                        # really strong causal!
-                        # cf_hidden[1][:,s_idx:e_idx] = dual_hidden[1][:,s_idx:e_idx] # only swap out this part.
-                        # projected_keys_textual[:,s_idx:e_idx] = dual_projected_keys_textual[:,s_idx:e_idx]
-                        # projected_keys_visual[:,s_idx:e_idx] = dual_projected_keys_visual[:,s_idx:e_idx]
+                        # WARNING: we also reinit the action state!
+                        # this ensures that our main task training objective is not disordered?
+                        cf_token=torch.zeros_like(
+                            intervened_target_batch[:,j]
+                        ).long().to(device)
                     (cf_output, cf_hidden) = model(
-                        lstm_input_tokens_sorted=intervened_target_batch[:,j],
+                        lstm_input_tokens_sorted=cf_token,
                         lstm_hidden=cf_hidden,
                         lstm_projected_keys_textual=projected_keys_textual,
                         lstm_commands_lengths=input_lengths_batch,
@@ -762,12 +770,21 @@ def train(
                         wandb.log({'counterfactual_exact_match': cf_exact_match})
                         intervene_time_record += [[intervene_time]]
                         intervene_attr_record += [[intervene_attribute]]
+
                         time_table = wandb.Table(data=intervene_time_record, columns=["intervene_time"])
                         wandb.log({'intervene_time_dist': wandb.plot.histogram(time_table, "intervene_time",
                                                    title="Histogram")})
                         attr_table = wandb.Table(data=intervene_attr_record, columns=["intervene_attr"])
                         wandb.log({'intervene_attr_dist': wandb.plot.histogram(attr_table, "intervene_attr",
                                                    title="Histogram")})
+                        time_cross_match_record += [[intervene_time, cf_exact_match]]
+                        time_cross_match_table = wandb.Table(data=time_cross_match_record, columns = ["intervene_time", "cf_exact_match"])
+                        wandb.log({"time_cross_match_table" : wandb.plot.scatter(time_cross_match_table, "intervene_time", "cf_exact_match")})
+
+                        attr_cross_match_record += [[intervene_attribute, cf_exact_match]]
+                        attr_cross_match_table = wandb.Table(data=attr_cross_match_record, columns = ["intervene_attribute", "cf_exact_match"])
+                        wandb.log({"attr_cross_match_table" : wandb.plot.scatter(attr_cross_match_table, "intervene_attribute", "cf_exact_match")})
+
                     wandb.log({'learning_rate': learning_rate})
             # Evaluate on test set.
             """
