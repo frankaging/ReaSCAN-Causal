@@ -256,8 +256,8 @@ def counterfactual_predict(
 
         min_len = min(target_max_seq_lens, dual_target_max_seq_lens)
         # intervene_time = random.randint(1, min(min(target_lengths_batch)[0], min(dual_target_lengths_batch)[0])-1) # we get rid of SOS and EOS tokens
-        intervene_time = random.choice([1,2,3])
-        # intervene_time = 2 # use fixed time.
+        # intervene_time = random.choice([1,2,3])
+        intervene_time = 1 # use fixed time.
         #####################
         #
         # high data start
@@ -302,7 +302,7 @@ def counterfactual_predict(
         # we need to take of the SOS and EOS tokens.
         for j in range(eval_max_decoding_steps-1):
             # intercept like antra!
-            if j == intervene_time:
+            if j == intervene_time-1:
                 # only swap out this part.
                 cf_high_hidden_states[:,intervene_attribute] = dual_high_hidden_states[:,intervene_attribute]
                 # comment out two lines below if it is not for testing.
@@ -416,7 +416,7 @@ def counterfactual_predict(
         
         # Iteratively decode the output.
         token = torch.tensor([sos_idx], dtype=torch.long, device=device)
-        for j in range(intervene_time):
+        for j in range(intervene_time-1):
             (dual_ouput, dual_hidden) = model(
                 lstm_input_tokens_sorted=token,
                 lstm_hidden=dual_hidden,
@@ -441,7 +441,7 @@ def counterfactual_predict(
         for decoding_iteration in range(intervened_target_batch.shape[1]):
             # this is for testing.
             # cf_token=intervened_target_batch[:,decoding_iteration]
-            if decoding_iteration == intervene_time:
+            if decoding_iteration == intervene_time-1:
                 s_idx = intervene_attribute*25
                 e_idx = intervene_attribute*25+25
                 cf_hidden[0][:,s_idx:e_idx] = dual_hidden[0][:,s_idx:e_idx] # only swap out this part.

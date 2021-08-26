@@ -412,6 +412,16 @@ def train(
             
             dual_input_max_seq_lens = max(dual_input_lengths_batch)[0]
             dual_target_max_seq_lens = max(dual_target_lengths_batch)[0]
+            
+            # let us allow shuffling here, so that we have more diversity.
+            perm_idx = torch.randperm(dual_input_batch.size()[0])
+            dual_input_batch = dual_input_batch.index_select(dim=0, index=perm_idx)
+            dual_target_batch = dual_target_batch.index_select(dim=0, index=perm_idx)
+            dual_situation_batch = dual_situation_batch.index_select(dim=0, index=perm_idx)
+            dual_agent_positions_batch = dual_agent_positions_batch.index_select(dim=0, index=perm_idx)
+            dual_target_positions_batch = dual_target_positions_batch.index_select(dim=0, index=perm_idx)
+            dual_input_lengths_batch = dual_input_lengths_batch.index_select(dim=0, index=perm_idx)
+            dual_target_lengths_batch = dual_target_lengths_batch.index_select(dim=0, index=perm_idx)
             dual_input_batch = dual_input_batch.to(device)
             dual_target_batch = dual_target_batch.to(device)
             dual_situation_batch = dual_situation_batch.to(device)
@@ -461,6 +471,8 @@ def train(
             target_max_seq_lens = max(target_lengths_batch)[0]
             dual_target_max_seq_lens = max(dual_target_lengths_batch)[0]
             intervene_time = random.randint(1, min(min(target_lengths_batch)[0], min(dual_target_lengths_batch)[0])-1) # we get rid of SOS and EOS tokens
+            # intervene_time = 1
+            # intervene_attribute = 0
             #####################
             #
             # high data start
@@ -507,9 +519,10 @@ def train(
             # we need to take of the SOS and EOS tokens.
             for j in range(train_max_decoding_steps-1):
                 # intercept like antra!
-                if j == intervene_time:
+                if j == intervene_time-1:
                     # only swap out this part.
                     cf_high_hidden_states[:,intervene_attribute] = dual_high_hidden_states[:,intervene_attribute]
+                    # cf_high_hidden_states = dual_high_hidden_states
                     # WARNING: we also reinit the action state!
                     # this ensures that our main task training objective is not disordered?
                     cf_high_actions = torch.zeros(
@@ -542,13 +555,23 @@ def train(
             intervened_target_lengths_batch[intervened_target_lengths_batch>train_max_decoding_steps] = train_max_decoding_steps
 
             # DEBUG.
+            two_right = 0
+            three_left = 0
             # for i in range(intervened_target_batch.size(0)):
-            #     print("original: ", target_batch[i])
-            #     print("dual: ", dual_target_batch[i])
-            #     print("time: ", intervene_time)
-            #     print("intervened: ", intervened_target_batch[i])
-            #     print("intervened length: ", intervened_target_lengths_batch[i])
-            #     print("===")
+                # print("original: ", target_batch[i])
+                # print("dual: ", dual_target_batch[i])
+                # print("time: ", intervene_time)
+                # print("intervened: ", intervened_target_batch[i])
+                # print("intervened length: ", intervened_target_lengths_batch[i])
+            #     right_count = (intervened_target_batch[i]==3).long().sum()
+            #     left_count = (intervened_target_batch[i]==5).long().sum()
+            #     if right_count >= 2:
+            #         two_right += 1
+            #     if left_count >= 3:
+            #         three_left += 1
+                # print("===")
+            # print(f"batch - two_right={two_right}, three_left={three_left}")
+            
             #####################
             #
             # high data end
@@ -575,7 +598,8 @@ def train(
             for i in range(batch_size):
                 match_target_intervened = intervened_target_batch[i,:intervened_target_lengths_batch[i,0]]
                 match_target_main = target_batch[i,:target_lengths_batch[i,0]]
-                is_bad_intervened = torch.equal(match_target_intervened, match_target_main)
+                # is_bad_intervened = torch.equal(match_target_intervened, match_target_main)
+                is_bad_intervened = False # we allow equal ones, they are useful too!!
                 if is_bad_intervened:
                     continue # we need to skip these.
                 else:
@@ -652,7 +676,7 @@ def train(
                 )
 
                 # get the intercepted dual hidden states.
-                for j in range(intervene_time):
+                for j in range(intervene_time-1):
                     (dual_output, dual_hidden) = model(
                         lstm_input_tokens_sorted=dual_target_batch[:,j],
                         lstm_hidden=dual_hidden,
@@ -668,7 +692,7 @@ def train(
                 for j in range(intervened_target_batch.shape[1]):
                     cf_token=intervened_target_batch[:,j]
                     # intercept like antra!
-                    if j == intervene_time:
+                    if j == intervene_time-1:
                         s_idx = intervene_attribute*25
                         e_idx = intervene_attribute*25+25
                         cf_hidden[0][:,s_idx:e_idx] = dual_hidden[0][:,s_idx:e_idx] # only swap out this part.
