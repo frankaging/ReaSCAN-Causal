@@ -169,6 +169,8 @@ class BahdanauAttentionDecoderRNN(nn.Module):
         self.dropout = nn.Dropout(dropout_probability)
         self.lstm = nn.LSTM(hidden_size * 3, hidden_size, num_layers=num_layers, 
                             dropout=dropout_probability, batch_first=True)
+        self.lstm_cell = nn.LSTM(hidden_size, hidden_size, num_layers=num_layers, 
+                            dropout=dropout_probability, batch_first=True)
         self.textual_attention = textual_attention
         self.visual_attention = visual_attention
         self.output_to_hidden = nn.Linear(hidden_size * 4, hidden_size, bias=False)

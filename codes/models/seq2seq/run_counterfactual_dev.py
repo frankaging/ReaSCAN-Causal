@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[32]:
+# In[1]:
 
 
 import argparse
@@ -92,31 +92,12 @@ def predict(
         input_sequence = input_sequence[:,:input_max_seq_lens]
         target_sequence = target_sequence[:,:target_max_seq_lens]
         
-        # in the evaluation phase, i think we can actually
-        # use the model itself not the graphical model.
-        # ENCODE
-        encoded_image = model(
-            situations_input=situation,
-            tag="situation_encode"
-        )
-        hidden, encoder_outputs = model(
+        # prepare the hidden stats
+        hidden = model(
             commands_input=input_sequence, 
             commands_lengths=input_lengths,
-            tag="command_input_encode_no_dict"
-        )
-
-        # DECODER INIT
-        hidden = model(
-            command_hidden=hidden,
-            tag="initialize_hidden"
-        )
-        projected_keys_visual = model(
-            encoded_situations=encoded_image,
-            tag="projected_keys_visual"
-        )
-        projected_keys_textual = model(
-            command_encoder_outputs=encoder_outputs["encoder_outputs"],
-            tag="projected_keys_textual"
+            situations_input=situation,
+            tag="lstm_hidden_init"
         )
         
         # Iteratively decode the output.
@@ -128,13 +109,10 @@ def predict(
         attention_weights_situations = []
         while token != eos_idx and decoding_iteration <= max_decoding_steps:
             
-            (output, hidden) = model(
+            (hidden, output) = model(
                 lstm_input_tokens_sorted=token,
                 lstm_hidden=hidden,
-                lstm_projected_keys_textual=projected_keys_textual,
-                lstm_commands_lengths=input_lengths,
-                lstm_projected_keys_visual=projected_keys_visual,
-                tag="_lstm_step_fxn"
+                tag="_lstm_step_fxn_ib"
             )
             output = F.log_softmax(output, dim=-1)
             token = output.max(dim=-1)[1]
@@ -470,9 +448,10 @@ def train(
             input_max_seq_lens = max(input_lengths_batch)[0]
             target_max_seq_lens = max(target_lengths_batch)[0]
             dual_target_max_seq_lens = max(dual_target_lengths_batch)[0]
-            intervene_time = random.randint(1, min(min(target_lengths_batch)[0], min(dual_target_lengths_batch)[0])-1) # we get rid of SOS and EOS tokens
-            # intervene_time = 1
-            # intervene_attribute = 0
+            main_intervene_time = random.randint(1, max(target_lengths_batch)[0]-2) # we get rid of SOS and EOS tokens
+            dual_intervene_time = random.randint(1, max(dual_target_lengths_batch)[0]-2) # we get rid of SOS and EOS tokens
+            # we will intervene on [1, max_length], but we will filter those examples
+            # with a total length smaller than max_length.
             #####################
             #
             # high data start
@@ -504,7 +483,7 @@ def train(
             ).long().to(device)
         
             # get the intercepted dual hidden states.
-            for j in range(intervene_time):
+            for j in range(dual_intervene_time):
                 dual_high_hidden_states, dual_high_actions = hi_model(
                     hmm_states=dual_high_hidden_states, 
                     hmm_actions=dual_high_actions, 
@@ -519,18 +498,18 @@ def train(
             # we need to take of the SOS and EOS tokens.
             for j in range(train_max_decoding_steps-1):
                 # intercept like antra!
-                if j == intervene_time-1:
+                if j == main_intervene_time-1:
+                    # idling for one time step.
+                    cf_high_hidden_states, _ = hi_model(
+                        hmm_states=cf_high_hidden_states, 
+                        hmm_actions=cf_high_actions, 
+                        tag="_hmm_step_fxn"
+                    )
                     # only swap out this part.
                     cf_high_hidden_states[:,intervene_attribute] = dual_high_hidden_states[:,intervene_attribute]
-                    # cf_high_hidden_states = dual_high_hidden_states
-                    # WARNING: we also reinit the action state!
-                    # this ensures that our main task training objective is not disordered?
                     cf_high_actions = torch.zeros(
                         dual_high_hidden_states.size(0), 1
                     ).long().to(device)
-                    # comment out two lines below if it is not for testing.
-                    # cf_high_hidden_states = dual_high_hidden_states
-                    # cf_high_actions = dual_high_actions
                 cf_high_hidden_states, cf_high_actions = hi_model(
                     hmm_states=cf_high_hidden_states, 
                     hmm_actions=cf_high_actions, 
@@ -599,7 +578,9 @@ def train(
                 match_target_intervened = intervened_target_batch[i,:intervened_target_lengths_batch[i,0]]
                 match_target_main = target_batch[i,:target_lengths_batch[i,0]]
                 # is_bad_intervened = torch.equal(match_target_intervened, match_target_main)
-                is_bad_intervened = False # we allow equal ones, they are useful too!!
+                
+                # we cannot intervene on the main example that is ended already!
+                is_bad_intervened = main_intervene_time > target_lengths_batch[i,0]-2
                 if is_bad_intervened:
                     continue # we need to skip these.
                 else:
@@ -626,64 +607,29 @@ def train(
                 intervened_target_batch = intervened_target_batch[idx_selected]
                 
                 # we use the main hidden to track.
-                encoded_image = model(
-                    situations_input=situation_batch,
-                    tag="situation_encode"
-                )
-                hidden, encoder_outputs = model(
+                main_hidden = model(
                     commands_input=input_batch, 
                     commands_lengths=input_lengths_batch,
-                    tag="command_input_encode_no_dict"
-                )
-
-                main_hidden = model(
-                    command_hidden=hidden,
-                    tag="initialize_hidden"
-                )
-                projected_keys_visual = model(
-                    encoded_situations=encoded_image,
-                    tag="projected_keys_visual"
-                )
-                projected_keys_textual = model(
-                    command_encoder_outputs=encoder_outputs["encoder_outputs"],
-                    tag="projected_keys_textual"
+                    situations_input=situation_batch,
+                    tag="lstm_hidden_init"
                 )
 
                 # dual setup.
                 dual_input_batch = dual_input_batch[:,:dual_input_max_seq_lens]
                 dual_target_batch = dual_target_batch[:,:dual_target_max_seq_lens]
-                dual_encoded_image = model(
-                    situations_input=dual_situation_batch,
-                    tag="situation_encode"
-                )
-                dual_hidden, dual_encoder_outputs = model(
+                dual_hidden = model(
                     commands_input=dual_input_batch, 
                     commands_lengths=dual_input_lengths_batch,
-                    tag="command_input_encode_no_dict"
-                )
-
-                dual_hidden = model(
-                    command_hidden=dual_hidden,
-                    tag="initialize_hidden"
-                )
-                dual_projected_keys_visual = model(
-                    encoded_situations=dual_encoded_image,
-                    tag="projected_keys_visual"
-                )
-                dual_projected_keys_textual = model(
-                    command_encoder_outputs=dual_encoder_outputs["encoder_outputs"],
-                    tag="projected_keys_textual"
+                    situations_input=dual_situation_batch,
+                    tag="lstm_hidden_init"
                 )
 
                 # get the intercepted dual hidden states.
-                for j in range(intervene_time):
-                    (dual_output, dual_hidden) = model(
+                for j in range(dual_intervene_time):
+                    (dual_hidden, dual_output) = model(
                         lstm_input_tokens_sorted=dual_target_batch[:,j],
                         lstm_hidden=dual_hidden,
-                        lstm_projected_keys_textual=dual_projected_keys_textual,
-                        lstm_commands_lengths=dual_input_lengths_batch,
-                        lstm_projected_keys_visual=dual_projected_keys_visual,
-                        tag="_lstm_step_fxn"
+                        tag="_lstm_step_fxn_ib"
                     )
                 
                 # main intervene for loop.
@@ -692,22 +638,22 @@ def train(
                 for j in range(intervened_target_batch.shape[1]):
                     cf_token=intervened_target_batch[:,j]
                     # intercept like antra!
-                    if j == intervene_time-1:
+                    if j == main_intervene_time-1:
+                        # idling for one time step.
+                        (cf_hidden, _) = model(
+                            lstm_input_tokens_sorted=cf_token,
+                            lstm_hidden=cf_hidden,
+                            tag="_lstm_step_fxn_ib"
+                        )
                         s_idx = intervene_attribute*25
                         e_idx = intervene_attribute*25+25
                         cf_hidden[0][:,:,s_idx:e_idx] = dual_hidden[0][:,:,s_idx:e_idx] # only swap out this part.
-                        # WARNING: we also reinit the action state!
-                        # this ensures that our main task training objective is not disordered?
-                        cf_token=torch.zeros_like(
-                            intervened_target_batch[:,j]
-                        ).long().to(device)
-                    (cf_output, cf_hidden) = model(
+                        # WARNING: we need to use None for intervention.
+                        cf_token = None
+                    (cf_hidden, cf_output) = model(
                         lstm_input_tokens_sorted=cf_token,
                         lstm_hidden=cf_hidden,
-                        lstm_projected_keys_textual=projected_keys_textual,
-                        lstm_commands_lengths=input_lengths_batch,
-                        lstm_projected_keys_visual=projected_keys_visual,
-                        tag="_lstm_step_fxn"
+                        tag="_lstm_step_fxn_ib"
                     )
                     # record the output for loss calculation.
                     cf_output = cf_output.unsqueeze(0)
@@ -792,7 +738,7 @@ def train(
                         wandb.log({'counterfactual count': len(idx_selected)})
                         wandb.log({'counterfactual_accuracy': cf_accuracy})
                         wandb.log({'counterfactual_exact_match': cf_exact_match})
-                        intervene_time_record += [[intervene_time]]
+                        intervene_time_record += [[main_intervene_time]]
                         intervene_attr_record += [[intervene_attribute]]
 
                         time_table = wandb.Table(data=intervene_time_record, columns=["intervene_time"])
@@ -801,7 +747,7 @@ def train(
                         attr_table = wandb.Table(data=intervene_attr_record, columns=["intervene_attr"])
                         wandb.log({'intervene_attr_dist': wandb.plot.histogram(attr_table, "intervene_attr",
                                                    title="Histogram")})
-                        time_cross_match_record += [[intervene_time, cf_exact_match]]
+                        time_cross_match_record += [[main_intervene_time, cf_exact_match]]
                         time_cross_match_table = wandb.Table(data=time_cross_match_record, columns = ["intervene_time", "cf_exact_match"])
                         wandb.log({"time_cross_match_table" : wandb.plot.scatter(time_cross_match_table, "intervene_time", "cf_exact_match")})
 

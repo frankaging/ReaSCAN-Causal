@@ -85,7 +85,8 @@ class Model(nn.Module):
                                                                  conditional_attention=conditional_attention)
         else:
             raise ValueError("Unknown attention type {} specified.".format(attention_type))
-
+        self.decoder_hidden_init = nn.Linear(3*decoder_hidden_size, decoder_hidden_size)
+            
         self.target_eos_idx = target_eos_idx
         self.target_pad_idx = target_pad_idx
         self.loss_criterion = nn.NLLLoss(ignore_index=target_pad_idx)
@@ -311,6 +312,79 @@ class Model(nn.Module):
                 lstm_commands_lengths,
                 lstm_projected_keys_visual,
             )
+        elif tag == "lstm_hidden_init":
+            
+            # encode shape world and command.
+            command_hidden, encoder_outputs = self.encoder(
+                input_batch=commands_input, 
+                input_lengths=commands_lengths,
+            ) # this hidden is pre-hidden, not formalized yet.
+            encoded_image = self.situation_encoder(situations_input)
+            # For efficiency
+            projected_keys_visual = self.visual_attention.key_layer(
+                encoded_image)  # [batch_size, situation_length, dec_hidden_dim]
+            projected_keys_textual = self.textual_attention.key_layer(
+                encoder_outputs["encoder_outputs"])  # [max_input_length, batch_size, dec_hidden_dim]
+            
+            # intialize the hidden states.
+            initial_hidden = self.attention_decoder.initialize_hidden(
+                self.tanh(self.enc_hidden_to_dec_hidden(command_hidden)))
+            initial_hidden, initial_cell = initial_hidden
+            
+            # further contextualize hidden states.
+            context_command, _ = self.attention_decoder.textual_attention(
+                queries=initial_hidden, projected_keys=projected_keys_textual,
+                values=projected_keys_textual, memory_lengths=encoder_outputs["sequence_lengths"]
+            )
+            # update hidden states here with conditioned image
+            batch_size, image_num_memory, _ = projected_keys_textual.size()
+            situation_lengths = torch.tensor(
+                [image_num_memory for _ in range(batch_size)]
+            ).long().to(device=commands_input.device)
+            if self.attention_decoder.conditional_attention:
+                queries = torch.cat([initial_hidden, context_command], dim=-1)
+                queries = self.attention_decoder.tanh(self.attention_decoder.queries_to_keys(queries))
+            else:
+                queries = initial_hidden
+            context_situation, _ = self.attention_decoder.visual_attention(
+                queries=queries, projected_keys=projected_keys_visual,
+                values=projected_keys_visual, memory_lengths=situation_lengths.unsqueeze(dim=-1))
+            # context : [batch_size, 1, hidden_size]
+            # attention_weights : [batch_size, 1, max_input_length]
+            
+            # get the initial hidden states
+            context_embedding = torch.cat([initial_hidden, context_command, context_situation], dim=-1)
+            hidden_init = self.decoder_hidden_init(context_embedding)
+            
+            return (hidden_init.transpose(0, 1), initial_cell.transpose(0, 1))
+        elif tag == "_lstm_step_fxn_ib":
+            if lstm_input_tokens_sorted == None:
+                # this code path is reserved for intervention ONLY!
+                curr_hidden, curr_cell = lstm_hidden
+                output = self.attention_decoder.hidden_to_output(
+                    curr_hidden.transpose(0, 1)
+                ) # [batch_size, 1, output_size]
+                output = output.squeeze(dim=1)   # [batch_size, output_size]
+                
+                return lstm_hidden, output
+            else:
+                # hidden.
+                embedded_input = self.attention_decoder.embedding(lstm_input_tokens_sorted)
+                embedded_input = self.attention_decoder.dropout(embedded_input)
+                embedded_input = embedded_input.unsqueeze(1)  # [batch_size, 1, hidden_size]
+                
+                curr_hidden, curr_cell = lstm_hidden
+                _, hidden = self.attention_decoder.lstm_cell(
+                    embedded_input, lstm_hidden
+                )
+                
+                # action.
+                output = self.attention_decoder.hidden_to_output(
+                    curr_hidden.transpose(0, 1)
+                ) # [batch_size, 1, output_size]
+                output = output.squeeze(dim=1)   # [batch_size, output_size]
+                
+                return hidden, output
         elif tag == "loss":
             return self.get_loss(loss_target_scores, loss_target_batch)
         elif tag == "update_state":

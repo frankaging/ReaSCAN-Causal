@@ -107,31 +107,12 @@ def predict(
         input_sequence = input_sequence[:,:input_max_seq_lens]
         target_sequence = target_sequence[:,:target_max_seq_lens]
         
-        # in the evaluation phase, i think we can actually
-        # use the model itself not the graphical model.
-        # ENCODE
-        encoded_image = model(
-            situations_input=situation,
-            tag="situation_encode"
-        )
-        hidden, encoder_outputs = model(
+        # prepare the hidden stats
+        hidden = model(
             commands_input=input_sequence, 
             commands_lengths=input_lengths,
-            tag="command_input_encode_no_dict"
-        )
-
-        # DECODER INIT
-        hidden = model(
-            command_hidden=hidden,
-            tag="initialize_hidden"
-        )
-        projected_keys_visual = model(
-            encoded_situations=encoded_image,
-            tag="projected_keys_visual"
-        )
-        projected_keys_textual = model(
-            command_encoder_outputs=encoder_outputs["encoder_outputs"],
-            tag="projected_keys_textual"
+            situations_input=situation,
+            tag="lstm_hidden_init"
         )
         
         # Iteratively decode the output.
@@ -143,13 +124,10 @@ def predict(
         attention_weights_situations = []
         while token != eos_idx and decoding_iteration <= max_decoding_steps:
             
-            (output, hidden) = model(
+            (hidden, output) = model(
                 lstm_input_tokens_sorted=token,
                 lstm_hidden=hidden,
-                lstm_projected_keys_textual=projected_keys_textual,
-                lstm_commands_lengths=input_lengths,
-                lstm_projected_keys_visual=projected_keys_visual,
-                tag="_lstm_step_fxn"
+                tag="_lstm_step_fxn_ib"
             )
             output = F.log_softmax(output, dim=-1)
             token = output.max(dim=-1)[1]
@@ -254,10 +232,8 @@ def counterfactual_predict(
         if intervene_attribute == -1:
             intervene_attribute = random.choice([0,1,2])
 
-        min_len = min(target_max_seq_lens, dual_target_max_seq_lens)
-        # intervene_time = random.randint(1, min(min(target_lengths_batch)[0], min(dual_target_lengths_batch)[0])-1) # we get rid of SOS and EOS tokens
-        # intervene_time = random.choice([1,2,3])
-        intervene_time = 1 # use fixed time.
+        main_intervene_time = random.randint(1, max(target_lengths_batch)[0]-2) # we get rid of SOS and EOS tokens
+        dual_intervene_time = random.randint(1, max(dual_target_lengths_batch)[0]-2) # we get rid of SOS and EOS tokens
         #####################
         #
         # high data start
@@ -287,7 +263,7 @@ def counterfactual_predict(
         
             
         # get the intercepted dual hidden states.
-        for j in range(intervene_time):
+        for j in range(dual_intervene_time):
             dual_high_hidden_states, dual_high_actions = hi_model(
                 hmm_states=dual_high_hidden_states, 
                 hmm_actions=dual_high_actions, 
@@ -302,7 +278,7 @@ def counterfactual_predict(
         # we need to take of the SOS and EOS tokens.
         for j in range(eval_max_decoding_steps-1):
             # intercept like antra!
-            if j == intervene_time-1:
+            if j == main_intervene_time-1:
                 # only swap out this part.
                 cf_high_hidden_states[:,intervene_attribute] = dual_high_hidden_states[:,intervene_attribute]
                 # comment out two lines below if it is not for testing.
@@ -333,7 +309,7 @@ def counterfactual_predict(
         match_target_intervened = intervened_target_batch[:,:intervened_target_lengths_batch[0,0]]
         match_target_main = target_batch
         is_bad_intervened = torch.equal(match_target_intervened, match_target_main)
-        if is_bad_intervened:
+        if is_bad_intervened or main_intervene_time > target_lengths_batch[0,0]-2:
             continue # we need to skip these.
             
         # print("->", target_batch)
@@ -356,74 +332,33 @@ def counterfactual_predict(
         """
         Low level data requires GPU forwarding.
         """
-        
-        # in the evaluation phase, i think we can actually
-        # use the model itself not the graphical model.
-        # ENCODE
-        encoded_image = model(
-            situations_input=situation_batch,
-            tag="situation_encode"
-        )
-        hidden, encoder_outputs = model(
+        # we use the main hidden to track.
+        main_hidden = model(
             commands_input=input_batch, 
             commands_lengths=input_lengths_batch,
-            tag="command_input_encode_no_dict"
-        )
-
-        # DECODER INIT
-        main_hidden = model(
-            command_hidden=hidden,
-            tag="initialize_hidden"
-        )
-        projected_keys_visual = model(
-            encoded_situations=encoded_image,
-            tag="projected_keys_visual"
-        )
-        projected_keys_textual = model(
-            command_encoder_outputs=encoder_outputs["encoder_outputs"],
-            tag="projected_keys_textual"
+            situations_input=situation_batch,
+            tag="lstm_hidden_init"
         )
 
         dual_input_batch = dual_input_batch[:,:dual_input_max_seq_lens]
         dual_target_batch = dual_target_batch[:,:dual_target_max_seq_lens]
-        
-        # in the evaluation phase, i think we can actually
-        # use the model itself not the graphical model.
-        # ENCODE
-        dual_encoded_image = model(
-            situations_input=dual_situation_batch,
-            tag="situation_encode"
-        )
-        dual_hidden, dual_encoder_outputs = model(
+        # dual setup.
+        dual_input_batch = dual_input_batch[:,:dual_input_max_seq_lens]
+        dual_target_batch = dual_target_batch[:,:dual_target_max_seq_lens]
+        dual_hidden = model(
             commands_input=dual_input_batch, 
             commands_lengths=dual_input_lengths_batch,
-            tag="command_input_encode_no_dict"
+            situations_input=dual_situation_batch,
+            tag="lstm_hidden_init"
         )
 
-        # DECODER INIT
-        dual_hidden = model(
-            command_hidden=dual_hidden,
-            tag="initialize_hidden"
-        )
-        dual_projected_keys_visual = model(
-            encoded_situations=dual_encoded_image,
-            tag="projected_keys_visual"
-        )
-        dual_projected_keys_textual = model(
-            command_encoder_outputs=dual_encoder_outputs["encoder_outputs"],
-            tag="projected_keys_textual"
-        )
-        
         # Iteratively decode the output.
         token = torch.tensor([sos_idx], dtype=torch.long, device=device)
-        for j in range(intervene_time):
-            (dual_ouput, dual_hidden) = model(
-                lstm_input_tokens_sorted=token,
+        for j in range(dual_intervene_time):
+            (dual_hidden, dual_output) = model(
+                lstm_input_tokens_sorted=dual_target_batch[:,j],
                 lstm_hidden=dual_hidden,
-                lstm_projected_keys_textual=dual_projected_keys_textual,
-                lstm_commands_lengths=dual_input_lengths_batch,
-                lstm_projected_keys_visual=dual_projected_keys_visual,
-                tag="_lstm_step_fxn"
+                tag="_lstm_step_fxn_ib"
             )
             dual_ouput = F.log_softmax(dual_ouput, dim=-1)
             token = dual_ouput.max(dim=-1)[1]
@@ -439,26 +374,22 @@ def counterfactual_predict(
         cf_hidden = main_hidden
         # while cf_token != eos_idx and decoding_iteration < max_decoding_steps:
         for decoding_iteration in range(intervened_target_batch.shape[1]):
-            # this is for testing.
-            # cf_token=intervened_target_batch[:,decoding_iteration]
             if decoding_iteration == intervene_time-1:
+                # idling for one time step.
+                (cf_hidden, _) = model(
+                    lstm_input_tokens_sorted=cf_token,
+                    lstm_hidden=cf_hidden,
+                    tag="_lstm_step_fxn_ib"
+                )
                 s_idx = intervene_attribute*25
                 e_idx = intervene_attribute*25+25
                 cf_hidden[0][:,:,s_idx:e_idx] = dual_hidden[0][:,:,s_idx:e_idx] # only swap out this part.
-                # comment this out for non-strong causual models
-                # cf_hidden[1][:,s_idx:e_idx] = dual_hidden[1][:,s_idx:e_idx] # only swap out this part.
-                # cf_hidden = dual_hidden
-                # projected_keys_textual = dual_projected_keys_textual
-                # input_lengths_batch = dual_input_lengths_batch
-                # projected_keys_visual = dual_projected_keys_visual
-                cf_token=torch.tensor([sos_idx], dtype=torch.long, device=device)
-            (cf_output, cf_hidden) = model(
+                # WARNING: we need to use None for intervention.
+                cf_token=None
+            (cf_hidden, cf_output) = model(
                 lstm_input_tokens_sorted=cf_token,
                 lstm_hidden=cf_hidden,
-                lstm_projected_keys_textual=projected_keys_textual,
-                lstm_commands_lengths=input_lengths_batch,
-                lstm_projected_keys_visual=projected_keys_visual,
-                tag="_lstm_step_fxn"
+                tag="_lstm_step_fxn_ib"
             )
             cf_output = F.log_softmax(cf_output, dim=-1)
             cf_token = cf_output.max(dim=-1)[1]
