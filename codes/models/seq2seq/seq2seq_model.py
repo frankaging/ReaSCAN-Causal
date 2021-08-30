@@ -197,64 +197,72 @@ class BahdanauAttentionDecoderRNN(nn.Module):
            (pair for hidden and cell)
           attention_weights : attention weights, [batch_size, 1, max_input_length]
         """
-        last_hidden, last_cell = last_hidden
-        last_hidden = last_hidden.transpose(0, 1)
-        last_cell = last_cell.transpose(0, 1)
+        if input_tokens is not None:
+            last_hidden, last_cell = last_hidden
+            last_hidden = last_hidden.transpose(0, 1)
+            last_cell = last_cell.transpose(0, 1)
 
-        # Embed each input symbol
-        embedded_input = self.embedding(input_tokens)  # [batch_size, hidden_size]
-        embedded_input = self.dropout(embedded_input)
-        embedded_input = embedded_input.unsqueeze(0)  # [1, batch_size, hidden_size]
-        
-        # Bahdanau attention
-        context_command, attention_weights_commands = self.textual_attention(
-            queries=last_hidden.transpose(0, 1), projected_keys=encoded_commands,
-            values=encoded_commands, memory_lengths=commands_lengths)
-        
-        batch_size, image_num_memory, _ = encoded_situations.size()
-        situation_lengths = torch.tensor([image_num_memory for _ in range(batch_size)]).long().to(device=embedded_input.device)
-        
-        if self.conditional_attention:
-            queries = torch.cat([last_hidden.transpose(0, 1), context_command], dim=-1)
-            queries = self.tanh(self.queries_to_keys(queries))
+            # Embed each input symbol
+            embedded_input = self.embedding(input_tokens)  # [batch_size, hidden_size]
+            embedded_input = self.dropout(embedded_input)
+            embedded_input = embedded_input.unsqueeze(0)  # [1, batch_size, hidden_size]
+
+            # Bahdanau attention
+            context_command, attention_weights_commands = self.textual_attention(
+                queries=last_hidden.transpose(0, 1), projected_keys=encoded_commands,
+                values=encoded_commands, memory_lengths=commands_lengths)
+
+            batch_size, image_num_memory, _ = encoded_situations.size()
+            situation_lengths = torch.tensor([image_num_memory for _ in range(batch_size)]).long().to(device=embedded_input.device)
+
+            if self.conditional_attention:
+                queries = torch.cat([last_hidden.transpose(0, 1), context_command], dim=-1)
+                queries = self.tanh(self.queries_to_keys(queries))
+            else:
+                queries = last_hidden.transpose(0, 1)
+
+            context_situation, attention_weights_situations = self.visual_attention(
+                queries=queries, projected_keys=encoded_situations,
+                values=encoded_situations, memory_lengths=situation_lengths.unsqueeze(dim=-1))
+            # context : [batch_size, 1, hidden_size]
+            # attention_weights : [batch_size, 1, max_input_length]
+
+            # Concatenate the context vector and RNN hidden state, and map to an output
+            attention_weights_commands = attention_weights_commands.squeeze(1)  # [batch_size, max_input_length]
+            attention_weights_situations = attention_weights_situations.squeeze(1)  # [batch_size, im_dim * im_dim]
+            concat_input = torch.cat([embedded_input,
+                                      context_command.transpose(0, 1),
+                                      context_situation.transpose(0, 1)], dim=2)  # [1, batch_size hidden_size*3]
+
+            last_hidden = (last_hidden, last_cell)
+            _, hidden = self.lstm(concat_input.transpose(0, 1), last_hidden)
+            # lstm_output: [batch_size, 1, hidden_size]
+            # hidden: tuple of each [num_layers, batch_size, hidden_size] (pair for hidden and cell)
+            # output = self.hidden_to_output(lstm_output)  # [batch_size, output_size]
+            # output = output.squeeze(dim=0)
+            curr_hidden, curr_cell = hidden
+            curr_hidden = curr_hidden.transpose(0, 1)
+            curr_cell = curr_cell.transpose(0, 1)
+            hidden = (curr_hidden, curr_cell)
+
+            # Concatenate all outputs and project to output size.
+            # pre_output = torch.cat([embedded_input.transpose(0, 1), lstm_output,
+            #                         context_command, context_situation], dim=2)
+            # pre_output = self.output_to_hidden(pre_output)  # [batch_size, 1, hidden_size]
+            output = self.hidden_to_output(curr_hidden)  # [batch_size, 1, output_size]
+            output = output.squeeze(dim=1)   # [batch_size, output_size]
+
+            return (output, hidden)
+            # output : [un-normalized probabilities] [batch_size, output_size]
+            # hidden: tuple of size [num_layers, batch_size, hidden_size] (for hidden and cell)
+            # attention_weights: [batch_size, max_input_length]
         else:
-            queries = last_hidden.transpose(0, 1)
-            
-        context_situation, attention_weights_situations = self.visual_attention(
-            queries=queries, projected_keys=encoded_situations,
-            values=encoded_situations, memory_lengths=situation_lengths.unsqueeze(dim=-1))
-        # context : [batch_size, 1, hidden_size]
-        # attention_weights : [batch_size, 1, max_input_length]
+            # if input_tokens is None, it means we are calculating
+            # the action directly without updating the states.
+            output = self.hidden_to_output(last_hidden[0])  # [batch_size, 1, output_size]
+            output = output.squeeze(dim=1)   # [batch_size, output_size]
 
-        # Concatenate the context vector and RNN hidden state, and map to an output
-        attention_weights_commands = attention_weights_commands.squeeze(1)  # [batch_size, max_input_length]
-        attention_weights_situations = attention_weights_situations.squeeze(1)  # [batch_size, im_dim * im_dim]
-        concat_input = torch.cat([embedded_input,
-                                  context_command.transpose(0, 1),
-                                  context_situation.transpose(0, 1)], dim=2)  # [1, batch_size hidden_size*3]
-
-        last_hidden = (last_hidden, last_cell)
-        lstm_output, hidden = self.lstm(concat_input.transpose(0, 1), last_hidden)
-        # lstm_output: [batch_size, 1, hidden_size]
-        # hidden: tuple of each [num_layers, batch_size, hidden_size] (pair for hidden and cell)
-        # output = self.hidden_to_output(lstm_output)  # [batch_size, output_size]
-        # output = output.squeeze(dim=0)
-        curr_hidden, curr_cell = hidden
-        curr_hidden = curr_hidden.transpose(0, 1)
-        curr_cell = curr_cell.transpose(0, 1)
-        hidden = (curr_hidden, curr_cell)
-
-        # Concatenate all outputs and project to output size.
-        pre_output = torch.cat([embedded_input.transpose(0, 1), lstm_output,
-                                context_command, context_situation], dim=2)
-        pre_output = self.output_to_hidden(pre_output)  # [batch_size, 1, hidden_size]
-        output = self.hidden_to_output(pre_output)  # [batch_size, 1, output_size]
-        output = output.squeeze(dim=1)   # [batch_size, output_size]
-        
-        return (output, hidden)
-        # output : [un-normalized probabilities] [batch_size, output_size]
-        # hidden: tuple of size [num_layers, batch_size, hidden_size] (for hidden and cell)
-        # attention_weights: [batch_size, max_input_length]
+            return (output, last_hidden)
 
     def forward(self, input_tokens: torch.LongTensor, input_lengths: List[int],
                 init_hidden: Tuple[torch.Tensor, torch.Tensor], encoded_commands: torch.Tensor,

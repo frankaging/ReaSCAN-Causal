@@ -380,7 +380,7 @@ class Model(nn.Module):
                 
                 # action.
                 output = self.attention_decoder.hidden_to_output(
-                    curr_hidden.transpose(0, 1)
+                    hidden[0].transpose(0, 1)
                 ) # [batch_size, 1, output_size]
                 output = output.squeeze(dim=1)   # [batch_size, output_size]
                 

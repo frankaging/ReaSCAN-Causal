@@ -232,6 +232,9 @@ def train(
     include_task_loss: bool,
     cf_loss_weight: float,
     is_wandb: bool,
+    intervene_attribute: int,
+    intervene_time: int,
+    intervene_dimenssion_size: int,
     max_training_examples=None, 
     seed=42,
     **kwargs
@@ -392,6 +395,21 @@ def train(
     intervene_attr_record = []
     time_cross_match_record = []
     attr_cross_match_record = []
+    
+    random_attr = False
+    random_time = False
+    if intervene_attribute == -1:
+        random_attr = True
+    if intervene_time == -1:
+        random_time = True
+        
+    controlled_random_attr = False
+    controlled_random_time = False
+    if intervene_attribute == -2:
+        controlled_random_attr = True
+    if intervene_time == -2:
+        controlled_random_time = True
+        
     while training_iteration < max_training_iterations:
 
         # Shuffle the dataset and loop over it.
@@ -439,17 +457,42 @@ def train(
             as it is much quicker.
             '''
             
-            # we will calculate these anyway
-            # even if we don't prop loss, we need to evaluate.
-            forward_main_low = {
-                "commands_input": input_batch, 
-                "commands_lengths": input_lengths_batch,
-                "situations_input": situation_batch,
-                "target_batch": target_batch,
-                "target_lengths": target_lengths_batch,
-            }
-            g_forward_main_low = GraphInput(forward_main_low, batched=True, batch_dim=0, cache_results=False)
-            target_scores = low_model.compute(g_forward_main_low)
+            # we use the main hidden to track.
+            task_encoded_image = model(
+                situations_input=situation_batch,
+                tag="situation_encode"
+            )
+            task_hidden, task_encoder_outputs = model(
+                commands_input=input_batch, 
+                commands_lengths=input_lengths_batch,
+                tag="command_input_encode_no_dict"
+            )
+            task_hidden = model(
+                command_hidden=task_hidden,
+                tag="initialize_hidden"
+            )
+            task_projected_keys_visual = model(
+                encoded_situations=task_encoded_image,
+                tag="projected_keys_visual"
+            )
+            task_projected_keys_textual = model(
+                command_encoder_outputs=task_encoder_outputs["encoder_outputs"],
+                tag="projected_keys_textual"
+            )
+            task_outputs = []
+            for j in range(train_max_decoding_steps):
+                task_token = target_batch[:,j]
+                (task_output, task_hidden) = model(
+                    lstm_input_tokens_sorted=task_token,
+                    lstm_hidden=task_hidden,
+                    lstm_projected_keys_textual=task_projected_keys_textual,
+                    lstm_commands_lengths=input_lengths_batch,
+                    lstm_projected_keys_visual=task_projected_keys_visual,
+                    tag="_lstm_step_fxn"
+                )
+                task_output = F.log_softmax(task_output, dim=-1)
+                task_outputs += [task_output]
+            target_scores = torch.stack(task_outputs, dim=1)
             task_loss = model(
                 loss_target_scores=target_scores, 
                 loss_target_batch=target_batch,
@@ -466,13 +509,31 @@ def train(
             1: y
             2: orientation
             """
-            intervene_attribute = random.choice([0,1,2])
             input_max_seq_lens = max(input_lengths_batch)[0]
             target_max_seq_lens = max(target_lengths_batch)[0]
             dual_target_max_seq_lens = max(dual_target_lengths_batch)[0]
-            intervene_time = random.randint(1, min(min(target_lengths_batch)[0], min(dual_target_lengths_batch)[0])-1) # we get rid of SOS and EOS tokens
-            # intervene_time = 1
-            # intervene_attribute = 0
+            
+            if controlled_random_attr:
+                # special case: we only look at x and y!
+                intervene_attribute = random.choice([0,1])
+            elif random_attr:
+                intervene_attribute = random.choice([0,1,2])
+                
+            if controlled_random_time:
+                # special case: we only look at time step 1 and 2 and 3!
+                intervene_time = random.choice([1,2,3])
+                intervene_with_time = intervene_time
+            elif random_time:
+                intervene_time = random.randint(
+                    1, max(target_lengths_batch)[0]-2
+                ) # we get rid of SOS and EOS tokens
+                # we also need to get the to-intervened time
+                intervene_with_time = random.randint(
+                    1, max(dual_target_lengths_batch)[0]-2
+                ) # we get rid of SOS and EOS tokens
+            else:
+                intervene_with_time = intervene_time
+            # print(intervene_time, intervene_with_time, intervene_attribute)
             #####################
             #
             # high data start
@@ -504,7 +565,7 @@ def train(
             ).long().to(device)
         
             # get the intercepted dual hidden states.
-            for j in range(intervene_time):
+            for j in range(intervene_with_time):
                 dual_high_hidden_states, dual_high_actions = hi_model(
                     hmm_states=dual_high_hidden_states, 
                     hmm_actions=dual_high_actions, 
@@ -520,6 +581,12 @@ def train(
             for j in range(train_max_decoding_steps-1):
                 # intercept like antra!
                 if j == intervene_time-1:
+                    # we need idle once by getting the states but not continue the HMM!
+                    cf_high_hidden_states, _ = hi_model(
+                        hmm_states=cf_high_hidden_states, 
+                        hmm_actions=cf_high_actions, 
+                        tag="_hmm_step_fxn"
+                    )
                     # only swap out this part.
                     cf_high_hidden_states[:,intervene_attribute] = dual_high_hidden_states[:,intervene_attribute]
                     # cf_high_hidden_states = dual_high_hidden_states
@@ -599,7 +666,7 @@ def train(
                 match_target_intervened = intervened_target_batch[i,:intervened_target_lengths_batch[i,0]]
                 match_target_main = target_batch[i,:target_lengths_batch[i,0]]
                 # is_bad_intervened = torch.equal(match_target_intervened, match_target_main)
-                is_bad_intervened = False # we allow equal ones, they are useful too!!
+                is_bad_intervened = (intervene_time>(target_lengths_batch[i,0]-2)) or                     (intervene_with_time>(dual_target_lengths_batch[i,0]-2))
                 if is_bad_intervened:
                     continue # we need to skip these.
                 else:
@@ -630,14 +697,14 @@ def train(
                     situations_input=situation_batch,
                     tag="situation_encode"
                 )
-                hidden, encoder_outputs = model(
+                main_hidden, encoder_outputs = model(
                     commands_input=input_batch, 
                     commands_lengths=input_lengths_batch,
                     tag="command_input_encode_no_dict"
                 )
 
                 main_hidden = model(
-                    command_hidden=hidden,
+                    command_hidden=main_hidden,
                     tag="initialize_hidden"
                 )
                 projected_keys_visual = model(
@@ -676,7 +743,7 @@ def train(
                 )
 
                 # get the intercepted dual hidden states.
-                for j in range(intervene_time):
+                for j in range(intervene_with_time):
                     (dual_output, dual_hidden) = model(
                         lstm_input_tokens_sorted=dual_target_batch[:,j],
                         lstm_hidden=dual_hidden,
@@ -693,14 +760,22 @@ def train(
                     cf_token=intervened_target_batch[:,j]
                     # intercept like antra!
                     if j == intervene_time-1:
-                        s_idx = intervene_attribute*25
-                        e_idx = intervene_attribute*25+25
+                        # we need idle once by getting the states but not continue the HMM!
+                        (_, cf_hidden) = model(
+                            lstm_input_tokens_sorted=cf_token,
+                            lstm_hidden=cf_hidden,
+                            lstm_projected_keys_textual=projected_keys_textual,
+                            lstm_commands_lengths=input_lengths_batch,
+                            lstm_projected_keys_visual=projected_keys_visual,
+                            tag="_lstm_step_fxn"
+                        )
+                        # intervene!
+                        s_idx = intervene_attribute*intervene_dimenssion_size
+                        e_idx = (intervene_attribute+1)*intervene_dimenssion_size
                         cf_hidden[0][:,:,s_idx:e_idx] = dual_hidden[0][:,:,s_idx:e_idx] # only swap out this part.
-                        # WARNING: we also reinit the action state!
-                        # this ensures that our main task training objective is not disordered?
-                        cf_token=torch.zeros_like(
-                            intervened_target_batch[:,j]
-                        ).long().to(device)
+                        # WARNING: this is a special way to bypassing the state
+                        # updates during intervention!
+                        cf_token = None
                     (cf_output, cf_hidden) = model(
                         lstm_input_tokens_sorted=cf_token,
                         lstm_hidden=cf_hidden,

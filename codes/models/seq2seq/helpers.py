@@ -160,7 +160,10 @@ def arg_parse():
     parser.add_argument("--cf_loss_weight", type=float, default=1.0, help="Weight of cf loss comparing to the task loss")
     parser.add_argument("--is_wandb", dest="is_wandb", default=False,
                         action="store_true", help="Whether to report metrics to weights and bias.")
-    parser.add_argument("--intervene_attribute", type=str, default="all")
+    parser.add_argument("--intervene_attribute", type=int, default=-1)
+    parser.add_argument("--intervene_time", type=int, default=-1)
+    parser.add_argument("--intervene_dimenssion_size", type=int, default=25)
+    
     try:
         get_ipython().run_line_magic('matplotlib', 'inline')
         args = parser.parse_args([])

@@ -184,6 +184,7 @@ def counterfactual_predict(
     max_examples_to_evaluate,
     device,
     intervene_attribute=-1,
+    intervene_time=-1,
 ) -> torch.Tensor:
     """
     Loop over all data in data_iterator and predict until <EOS> token is reached.
@@ -202,6 +203,13 @@ def counterfactual_predict(
     # Loop over the data.
     total_count = 0
     bad_count = 0
+    
+    random_attr = False
+    random_time = False
+    if intervene_attribute == -1:
+        random_attr = True
+    if intervene_time == -1:
+        random_time = True
     for step, batch in enumerate(tqdm(data_iterator)):
         
         total_count += 1
@@ -251,13 +259,21 @@ def counterfactual_predict(
         input_max_seq_lens = max(input_lengths_batch)[0]
         target_max_seq_lens = max(target_lengths_batch)[0]
         dual_target_max_seq_lens = max(dual_target_lengths_batch)[0]
-        if intervene_attribute == -1:
-            intervene_attribute = random.choice([0,1,2])
-
         min_len = min(target_max_seq_lens, dual_target_max_seq_lens)
-        # intervene_time = random.randint(1, min(min(target_lengths_batch)[0], min(dual_target_lengths_batch)[0])-1) # we get rid of SOS and EOS tokens
-        # intervene_time = random.choice([1,2,3])
-        intervene_time = 1 # use fixed time.
+           
+        if random_attr:
+            intervene_attribute = random.choice([0,1,2])
+        if random_time:
+            intervene_time = random.randint(
+                1, max(target_lengths_batch)[0]-2
+            ) # we get rid of SOS and EOS tokens
+            # we also need to get the to-intervened time
+            intervene_with_time = random.randint(
+                1, max(dual_target_lengths_batch)[0]-2
+            ) # we get rid of SOS and EOS tokens
+        else:
+            intervene_with_time = intervene_time
+        print(intervene_time, intervene_with_time, intervene_attribute)
         #####################
         #
         # high data start
@@ -287,7 +303,7 @@ def counterfactual_predict(
         
             
         # get the intercepted dual hidden states.
-        for j in range(intervene_time):
+        for j in range(intervene_with_time):
             dual_high_hidden_states, dual_high_actions = hi_model(
                 hmm_states=dual_high_hidden_states, 
                 hmm_actions=dual_high_actions, 
@@ -303,6 +319,12 @@ def counterfactual_predict(
         for j in range(eval_max_decoding_steps-1):
             # intercept like antra!
             if j == intervene_time-1:
+                # we need idle once by getting the states but not continue the HMM!
+                cf_high_hidden_states, _ = hi_model(
+                    hmm_states=cf_high_hidden_states, 
+                    hmm_actions=cf_high_actions, 
+                    tag="_hmm_step_fxn"
+                )
                 # only swap out this part.
                 cf_high_hidden_states[:,intervene_attribute] = dual_high_hidden_states[:,intervene_attribute]
                 # comment out two lines below if it is not for testing.
@@ -332,7 +354,8 @@ def counterfactual_predict(
         # otherwise, we are overestimating the performance a lot.
         match_target_intervened = intervened_target_batch[:,:intervened_target_lengths_batch[0,0]]
         match_target_main = target_batch
-        is_bad_intervened = torch.equal(match_target_intervened, match_target_main)
+        # is_bad_intervened = torch.equal(match_target_intervened, match_target_main)
+        is_bad_intervened = (intervene_time>(target_lengths_batch[i,0]-2)) or                     (intervene_with_time>(dual_target_lengths_batch[i,0]-2))
         if is_bad_intervened:
             continue # we need to skip these.
             
@@ -416,7 +439,7 @@ def counterfactual_predict(
         
         # Iteratively decode the output.
         token = torch.tensor([sos_idx], dtype=torch.long, device=device)
-        for j in range(intervene_time):
+        for j in range(intervene_with_time):
             (dual_ouput, dual_hidden) = model(
                 lstm_input_tokens_sorted=token,
                 lstm_hidden=dual_hidden,
@@ -442,16 +465,21 @@ def counterfactual_predict(
             # this is for testing.
             # cf_token=intervened_target_batch[:,decoding_iteration]
             if decoding_iteration == intervene_time-1:
+                # we need idle once by getting the states but not continue the HMM!
+                (_, cf_hidden) = model(
+                    lstm_input_tokens_sorted=cf_token,
+                    lstm_hidden=cf_hidden,
+                    lstm_projected_keys_textual=projected_keys_textual,
+                    lstm_commands_lengths=input_lengths_batch,
+                    lstm_projected_keys_visual=projected_keys_visual,
+                    tag="_lstm_step_fxn"
+                )
                 s_idx = intervene_attribute*25
                 e_idx = intervene_attribute*25+25
                 cf_hidden[0][:,:,s_idx:e_idx] = dual_hidden[0][:,:,s_idx:e_idx] # only swap out this part.
-                # comment this out for non-strong causual models
-                # cf_hidden[1][:,s_idx:e_idx] = dual_hidden[1][:,s_idx:e_idx] # only swap out this part.
-                # cf_hidden = dual_hidden
-                # projected_keys_textual = dual_projected_keys_textual
-                # input_lengths_batch = dual_input_lengths_batch
-                # projected_keys_visual = dual_projected_keys_visual
-                cf_token=torch.tensor([sos_idx], dtype=torch.long, device=device)
+                # WARNING: this is a special way to bypassing the state
+                # updates during intervention!
+                cf_token = None
             (cf_output, cf_hidden) = model(
                 lstm_input_tokens_sorted=cf_token,
                 lstm_hidden=cf_hidden,
@@ -497,7 +525,6 @@ def predict_and_save(
     device,
     max_testing_examples=None, 
     counterfactual_evaluate=False,
-    intervene_attribute=-1,
     **kwargs
 ):
     """
@@ -573,7 +600,8 @@ def predict_and_save(
                     eos_idx=dataset.target_vocabulary.eos_idx, 
                     max_examples_to_evaluate=max_testing_examples, 
                     device=device,
-                    intervene_attribute=intervene_attribute,
+                    intervene_attribute=cfg["kwargs"]["intervene_attribute"],
+                    intervene_time=cfg["kwargs"]["intervene_time"],
             ):
                 example_count += 1
                 accuracy = sequence_accuracy(output_sequence, target_sequence[0].tolist()[1:-1])
@@ -726,18 +754,6 @@ def main(flags):
             output_file_name = "_".join([split, flags["output_file_name"]])
             output_file_path = os.path.join(flags["resume_from_file"], output_file_name)
             logger.info("All results will be saved to '{}'".format(output_file_path))
-            if flags["intervene_attribute"] == "all":
-                intervene_attribute = -1
-            else:
-                if flags["intervene_attribute"] == "x":
-                    flags["intervene_attribute"] = 0
-                elif flags["intervene_attribute"] == "y":
-                    flags["intervene_attribute"] = 1
-                elif flags["intervene_attribute"] == "o":
-                    flags["intervene_attribute"] = 2
-                else:
-                    flags["intervene_attribute"] = -1
-                    # assert False f"Your intervene attribute {flags["intervene_attribute"]} is unknown."
             
             output_file = predict_and_save(
                 dataset=test_set, 

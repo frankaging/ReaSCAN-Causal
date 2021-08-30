@@ -354,21 +354,48 @@ def train(
             input_lengths_batch = input_lengths_batch.to(device)
             target_lengths_batch = target_lengths_batch.to(device)
             
-            # Instead of calling forward(), we call the graph model wrapper.
-            input_dict = {
-                "commands_input": input_batch, 
-                "commands_lengths": input_lengths_batch,
-                "situations_input": situation_batch,
-                "target_batch": target_batch,
-                "target_lengths": target_lengths_batch,
-            }
-            g_input_dict = GraphInput(input_dict, batched=True, batch_dim=0, cache_results=False)
-            target_scores = g_model.compute(g_input_dict)
+            # we use the main hidden to track.
+            encoded_image = model(
+                situations_input=situation_batch,
+                tag="situation_encode"
+            )
+            hidden, encoder_outputs = model(
+                commands_input=input_batch, 
+                commands_lengths=input_lengths_batch,
+                tag="command_input_encode_no_dict"
+            )
+            hidden = model(
+                command_hidden=hidden,
+                tag="initialize_hidden"
+            )
+            projected_keys_visual = model(
+                encoded_situations=encoded_image,
+                tag="projected_keys_visual"
+            )
+            projected_keys_textual = model(
+                command_encoder_outputs=encoder_outputs["encoder_outputs"],
+                tag="projected_keys_textual"
+            )
+            outputs = []
+            for j in range(train_max_decoding_steps):
+                token = target_batch[:,j]
+                (output, hidden) = model(
+                    lstm_input_tokens_sorted=token,
+                    lstm_hidden=hidden,
+                    lstm_projected_keys_textual=projected_keys_textual,
+                    lstm_commands_lengths=input_lengths_batch,
+                    lstm_projected_keys_visual=projected_keys_visual,
+                    tag="_lstm_step_fxn"
+                )
+                output = F.log_softmax(output, dim=-1)
+                outputs += [output]
+            target_scores = torch.stack(outputs, dim=1)
             loss = model(
                 loss_target_scores=target_scores, 
                 loss_target_batch=target_batch,
                 tag="loss"
             )
+                
             if use_cuda and n_gpu > 1:
                 loss = loss.mean() # mean() to average on multi-gpu.
             # we need to average over actual length to get rid of padding losses.
