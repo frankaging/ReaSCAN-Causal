@@ -58,12 +58,15 @@ def isnotebook():
 def predict(
     data_iterator, 
     model, 
+    hi_model,
     max_decoding_steps, 
     pad_idx, 
     sos_idx,
     eos_idx, 
     max_examples_to_evaluate,
-    device
+    device,
+    intervene_time,
+    intervene_dimension_size,
 ) -> torch.Tensor:
     """
     Loop over all data in data_iterator and predict until <EOS> token is reached.
@@ -103,6 +106,24 @@ def predict(
         input_lengths = input_lengths.to(device)
         target_lengths = target_lengths.to(device)
 
+        high_hidden_states = hi_model(
+            agent_positions_batch=agent_positions.unsqueeze(dim=-1), 
+            target_positions_batch=target_positions.unsqueeze(dim=-1), 
+            tag="situation_encode"
+        )
+        high_actions = torch.zeros(
+            high_hidden_states.size(0), 1
+        ).long().to(device)
+
+        # get the intercepted dual hidden states.
+        for j in range(intervene_time):
+            high_hidden_states, _ = hi_model(
+                hmm_states=high_hidden_states, 
+                hmm_actions=high_actions, 
+                tag="_hmm_step_fxn"
+            )
+        true_target_positions = high_hidden_states+5
+        
         # We need to chunk
         input_sequence = input_sequence[:,:input_max_seq_lens]
         target_sequence = target_sequence[:,:target_max_seq_lens]
@@ -155,15 +176,65 @@ def predict(
             token = output.max(dim=-1)[1]
 
             output_sequence.append(token.data[0].item())
+            
+            # pred target positions.
+            if decoding_iteration == intervene_time-1:
+                # we need to evaluate our position pred as well.
+                
+                x_s_idx = 0
+                y_s_idx = intervene_dimension_size
+                y_e_idx = 2*intervene_dimension_size
+                
+                cf_target_positions_x = model(
+                    position_hidden=hidden[0][:,:,x_s_idx:y_s_idx].squeeze(dim=1),
+                    cf_auxiliary_task_tag="x",
+                    tag="cf_auxiliary_task"
+                )
+                cf_target_positions_x = F.log_softmax(cf_target_positions_x, dim=-1)
+                cf_target_positions_y = model(
+                    position_hidden=hidden[0][:,:,y_s_idx:y_e_idx].squeeze(dim=1),
+                    cf_auxiliary_task_tag="y",
+                    tag="cf_auxiliary_task"
+                )
+                cf_target_positions_y = F.log_softmax(cf_target_positions_y, dim=-1)
+                
+                loss_position_x = model(
+                    loss_pred_target_positions=cf_target_positions_x,
+                    loss_true_target_positions=true_target_positions[:,0],
+                    tag="cf_auxiliary_task_loss"
+                )
+                loss_position_y = model(
+                    loss_pred_target_positions=cf_target_positions_y,
+                    loss_true_target_positions=true_target_positions[:,1],
+                    tag="cf_auxiliary_task_loss"
+                )
+                # some metrics
+                metrics_position_x = model(
+                    loss_pred_target_positions=cf_target_positions_x,
+                    loss_true_target_positions=true_target_positions[:,0],
+                    tag="cf_auxiliary_task_metrics"
+                )
+                metrics_position_y = model(
+                    loss_pred_target_positions=cf_target_positions_y,
+                    loss_true_target_positions=true_target_positions[:,1],
+                    tag="cf_auxiliary_task_metrics"
+                )
+                predicted_target_positions_x = cf_target_positions_x.max(dim=-1)[1]
+                predicted_target_positions_y = cf_target_positions_y.max(dim=-1)[1]
+            
             decoding_iteration += 1
 
         if output_sequence[-1] == eos_idx:
             output_sequence.pop()
-        if model(tag="auxiliary_task"):
-            pass
-        else:
-            auxiliary_accuracy_agent, auxiliary_accuracy_target = 0, 0
-        yield (input_sequence, output_sequence, target_sequence, auxiliary_accuracy_target)
+
+        auxiliary_accuracy_agent, auxiliary_accuracy_target = 0, 0
+
+        yield (
+            input_sequence, output_sequence, target_sequence, auxiliary_accuracy_target, 
+            metrics_position_x, metrics_position_y, 
+            predicted_target_positions_x, predicted_target_positions_y,
+            true_target_positions[:,0], true_target_positions[:,1],
+        )
 
     elapsed_time = time.time() - start_time
     logging.info("Predicted for {} examples.".format(i))
@@ -175,7 +246,7 @@ def predict(
 
 def counterfactual_predict(
     data_iterator, 
-    model, low_model, hi_model,
+    model, hi_model,
     max_decoding_steps, 
     eval_max_decoding_steps,
     pad_idx, 
@@ -185,6 +256,7 @@ def counterfactual_predict(
     device,
     intervene_attribute=-1,
     intervene_time=-1,
+    intervene_dimension_size=25,
 ) -> torch.Tensor:
     """
     Loop over all data in data_iterator and predict until <EOS> token is reached.
@@ -273,7 +345,7 @@ def counterfactual_predict(
             ) # we get rid of SOS and EOS tokens
         else:
             intervene_with_time = intervene_time
-        print(intervene_time, intervene_with_time, intervene_attribute)
+        # print(intervene_time, intervene_with_time, intervene_attribute)
         #####################
         #
         # high data start
@@ -474,8 +546,8 @@ def counterfactual_predict(
                     lstm_projected_keys_visual=projected_keys_visual,
                     tag="_lstm_step_fxn"
                 )
-                s_idx = intervene_attribute*25
-                e_idx = intervene_attribute*25+25
+                s_idx = intervene_attribute*intervene_dimension_size
+                e_idx = (intervene_attribute+1)*intervene_dimension_size
                 cf_hidden[0][:,:,s_idx:e_idx] = dual_hidden[0][:,:,s_idx:e_idx] # only swap out this part.
                 # WARNING: this is a special way to bypassing the state
                 # updates during intervention!
@@ -519,7 +591,7 @@ def array_to_sentence(sentence_array, vocab):
 def predict_and_save(
     dataset: ReaSCANDataset, 
     model: nn.Module, 
-    low_model, hi_model,
+    hi_model,
     output_file_path: str, 
     max_decoding_steps: int,
     device,
@@ -552,14 +624,16 @@ def predict_and_save(
             #################
             exact_match_count = 0
             example_count = 0
-            for input_sequence, output_sequence, target_sequence, aux_acc_target in predict(
-                    data_iterator=data_iterator, model=model, 
+            for input_sequence, output_sequence, target_sequence, aux_acc_target, pred_pos_x_acc,                 pred_pos_y_acc, pred_pos_x, pred_pos_y, true_pos_x, true_pos_y in predict(
+                    data_iterator=data_iterator, model=model, hi_model=hi_model, 
                     max_decoding_steps=max_decoding_steps, 
                     pad_idx=dataset.target_vocabulary.pad_idx,
                     sos_idx=dataset.target_vocabulary.sos_idx, 
                     eos_idx=dataset.target_vocabulary.eos_idx, 
                     max_examples_to_evaluate=max_testing_examples, 
-                    device=device
+                    device=device,
+                    intervene_time=cfg["kwargs"]["intervene_time"],
+                    intervene_dimension_size=cfg["kwargs"]["intervene_dimension_size"],
             ):
                 example_count += 1
                 accuracy = sequence_accuracy(output_sequence, target_sequence[0].tolist()[1:-1])
@@ -574,7 +648,12 @@ def predict_and_save(
                                "target": target_str_sequence,
                                "accuracy": accuracy,
                                "exact_match": True if accuracy == 100 else False,
-                               "position_accuracy": aux_acc_target})      
+                               "pred_pos_x_acc": pred_pos_x_acc.tolist(), 
+                               "pred_pos_y_acc": pred_pos_y_acc.tolist(), 
+                               "pred_pos_exact_match": True if pred_pos_x_acc ==100 and pred_pos_y_acc == 100 else False,
+                               "pred_pos": (pred_pos_x.tolist()[0]-5, pred_pos_y.tolist()[0]-5),
+                               "true_pos": (true_pos_x.tolist()[0]-5, true_pos_y.tolist()[0]-5),
+                              })      
             exact_match = (exact_match_count/example_count)*100.0
             logger.info(" Task Evaluation Exact Match: %5.2f " % (exact_match))
             if not counterfactual_evaluate:
@@ -592,7 +671,7 @@ def predict_and_save(
             example_count = 0
             for input_sequence, dual_input_sequence, intervene_attribute, intervene_time,                 output_sequence, target_sequence, original_target_sequence, original_dual_target_str_sequence,                 aux_acc_target in counterfactual_predict(
                     data_iterator=data_iterator, model=model, 
-                    low_model=low_model, hi_model=hi_model,
+                    hi_model=hi_model,
                     max_decoding_steps=max_decoding_steps, 
                     eval_max_decoding_steps=eval_max_decoding_steps,
                     pad_idx=dataset.target_vocabulary.pad_idx,
@@ -602,6 +681,7 @@ def predict_and_save(
                     device=device,
                     intervene_attribute=cfg["kwargs"]["intervene_attribute"],
                     intervene_time=cfg["kwargs"]["intervene_time"],
+                    intervene_dimension_size=cfg["kwargs"]["intervene_dimension_size"],
             ):
                 example_count += 1
                 accuracy = sequence_accuracy(output_sequence, target_sequence[0].tolist()[1:-1])
@@ -697,6 +777,9 @@ def main(flags):
             logger.info("  Output vocabulary size: {}".format(test_set.target_vocabulary_size))
             logger.info("  Most common target words: {}".format(test_set.target_vocabulary.most_common(5)))
             
+            grid_size = test_set.grid_size
+            target_position_size = 2*grid_size - 1
+            
             # create modell based on our dataset.
             model = Model(input_vocabulary_size=test_set.input_vocabulary_size,
                           target_vocabulary_size=test_set.target_vocabulary_size,
@@ -704,6 +787,7 @@ def main(flags):
                           input_padding_idx=test_set.input_vocabulary.pad_idx,
                           target_pad_idx=test_set.target_vocabulary.pad_idx,
                           target_eos_idx=test_set.target_vocabulary.eos_idx,
+                          target_position_size=target_position_size,
                           **flags)
 
             # gpu setups
@@ -719,12 +803,6 @@ def main(flags):
             We have two low model so that our computation is much faster.
             """
             eval_max_decoding_steps = flags["max_decoding_steps"] # we need to use this extended step to measure for eval.
-            low_model = ReaSCANMultiModalLSTMCompGraph(
-                 model,
-                 eval_max_decoding_steps,
-                 is_cf=False,
-                 cache_results=False
-            )
 
             hi_model = HighLevelModel(
                 # None
@@ -748,7 +826,7 @@ def main(flags):
                 model_path = os.path.join(flags["resume_from_file"], f"checkpoint-{evaluate_checkpoint}.pth.tar")
             assert os.path.isfile(model_path), "No checkpoint found at {}".format(model_path)
             logger.info("Loading checkpoint from file at '{}'".format(model_path))
-            model.load_model(model_path)
+            model.load_model(device, model_path, strict=False)
             start_iteration = model.trained_iterations
             logger.info("Loaded checkpoint '{}' (iter {})".format(model_path, start_iteration))
             output_file_name = "_".join([split, flags["output_file_name"]])
@@ -757,7 +835,7 @@ def main(flags):
             
             output_file = predict_and_save(
                 dataset=test_set, 
-                model=model, low_model=low_model, hi_model=hi_model,
+                model=model, hi_model=hi_model,
                 output_file_path=output_file_path, 
                 device=device,
                 # we don't need counterfactual evaluation on generalization splits for now.

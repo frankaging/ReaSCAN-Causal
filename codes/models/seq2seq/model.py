@@ -26,7 +26,8 @@ class Model(nn.Module):
                  decoder_hidden_size: int, num_cnn_channels: int, cnn_kernel_size: int,
                  cnn_dropout_p: float, cnn_hidden_num_channels: int, input_padding_idx: int, target_pad_idx: int,
                  target_eos_idx: int, output_directory: str, conditional_attention: bool, auxiliary_task: bool,
-                 simple_situation_representation: bool, attention_type: str, **kwargs):
+                 simple_situation_representation: bool, attention_type: str, target_position_size: int, 
+                 intervene_dimension_size: int, **kwargs):
         super(Model, self).__init__()
 
         logger.warning(f"Model output directory: {output_directory}")
@@ -86,6 +87,12 @@ class Model(nn.Module):
         else:
             raise ValueError("Unknown attention type {} specified.".format(attention_type))
         self.decoder_hidden_init = nn.Linear(3*decoder_hidden_size, decoder_hidden_size)
+        
+        # We use these two variables to encode target and agent position offsets.
+        # Be careful that this is NOT the x, y for the target, IT IS the relative 
+        # x, y for the target w.r.t. the agent.
+        self.target_position_decoder_x = nn.Linear(intervene_dimension_size, target_position_size)
+        self.target_position_decoder_y = nn.Linear(intervene_dimension_size, target_position_size)
             
         self.target_eos_idx = target_eos_idx
         self.target_pad_idx = target_pad_idx
@@ -155,7 +162,19 @@ class Model(nn.Module):
     def get_auxiliary_loss(self, auxiliary_scores_target: torch.Tensor, target_target_positions: torch.Tensor):
         target_loss = self.auxiliary_loss_criterion(auxiliary_scores_target, target_target_positions.view(-1))
         return target_loss
-
+    
+    def get_cf_auxiliary_loss(self, target_position_scores, target_positions):
+        loss = self.loss_criterion(target_position_scores, target_positions.view(-1))
+        return loss
+    
+    def get_cf_auxiliary_metrics(self, target_position_scores, target_positions):
+        predicted_target_positions = target_position_scores.max(dim=-1)[1]
+        equal_targets = torch.eq(target_positions.data, predicted_target_positions.data).long()
+        match_sum_per_batch = equal_targets.sum()
+        batch_size = target_position_scores.size(0)
+        exact_match = 100. * match_sum_per_batch / batch_size
+        return exact_match
+    
     def auxiliary_task_forward(self, output_scores_target_pos: torch.Tensor) -> torch.Tensor:
         assert self.auxiliary_task, "Please set auxiliary_task to True if using it."
         batch_size, _ = output_scores_target_pos.size()
@@ -217,10 +236,15 @@ class Model(nn.Module):
                 # loss
                 loss_target_scores=None,
                 loss_target_batch=None,
+                # position related hidden states
+                position_hidden=None,
+                loss_pred_target_positions=None,
+                loss_true_target_positions=None,
                 # others
                 is_best=None,
                 accuracy=None,
                 exact_match=None,
+                cf_auxiliary_task_tag=None,
                 tag="default",
                ):
         if tag == "situation_encode":
@@ -395,8 +419,20 @@ class Model(nn.Module):
             return self.get_metrics(
                 loss_target_scores, loss_target_batch
             )
-        elif tag == "auxiliary_task":
-            return False
+        elif tag == "cf_auxiliary_task":
+            assert cf_auxiliary_task_tag != None
+            assert position_hidden != None
+            if cf_auxiliary_task_tag == "x":
+                position = self.target_position_decoder_x(position_hidden)
+            elif cf_auxiliary_task_tag == "y":
+                position = self.target_position_decoder_y(position_hidden)
+            else:
+                assert False
+            return position
+        elif tag == "cf_auxiliary_task_loss":
+            return self.get_cf_auxiliary_loss(loss_pred_target_positions, loss_true_target_positions)
+        elif tag == "cf_auxiliary_task_metrics":
+            return self.get_cf_auxiliary_metrics(loss_pred_target_positions, loss_true_target_positions)
         else:
             encoder_output = self.encode_input(commands_input=commands_input, commands_lengths=commands_lengths,
                                                situations_input=situations_input)
@@ -418,11 +454,11 @@ class Model(nn.Module):
             self.best_accuracy = accuracy
             self.best_iteration = self.trained_iterations
 
-    def load_model(self, path_to_checkpoint: str) -> dict:
-        checkpoint = torch.load(path_to_checkpoint)
+    def load_model(self, device, path_to_checkpoint: str, strict=True) -> dict:
+        checkpoint = torch.load(path_to_checkpoint, map_location=device)
         self.trained_iterations = checkpoint["iteration"]
         self.best_iteration = checkpoint["best_iteration"]
-        self.load_state_dict(checkpoint["state_dict"])
+        self.load_state_dict(checkpoint["state_dict"], strict=strict)
         self.best_exact_match = checkpoint["best_exact_match"]
         self.best_accuracy = checkpoint["best_accuracy"]
         return checkpoint["optimizer_state_dict"]

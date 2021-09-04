@@ -162,7 +162,10 @@ def arg_parse():
                         action="store_true", help="Whether to report metrics to weights and bias.")
     parser.add_argument("--intervene_attribute", type=int, default=-1)
     parser.add_argument("--intervene_time", type=int, default=-1)
-    parser.add_argument("--intervene_dimenssion_size", type=int, default=25)
+    parser.add_argument("--intervene_dimension_size", type=int, default=25)
+    parser.add_argument("--include_cf_auxiliary_loss", dest="include_cf_auxiliary_loss", default=False, action="store_true",
+                        help="If set to true, the model predicts the target location from the joint attention over the "
+                             "input instruction and world state.")
     
     try:
         get_ipython().run_line_magic('matplotlib', 'inline')

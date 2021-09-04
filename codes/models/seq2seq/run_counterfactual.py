@@ -43,12 +43,15 @@ def isnotebook():
 def predict(
     data_iterator, 
     model, 
+    hi_model,
     max_decoding_steps, 
     pad_idx, 
     sos_idx,
     eos_idx, 
     max_examples_to_evaluate,
-    device
+    device,
+    intervene_time,
+    intervene_dimension_size,
 ) -> torch.Tensor:
     """
     Loop over all data in data_iterator and predict until <EOS> token is reached.
@@ -88,6 +91,23 @@ def predict(
         input_lengths = input_lengths.to(device)
         target_lengths = target_lengths.to(device)
 
+        high_hidden_states = hi_model(
+            agent_positions_batch=agent_positions.unsqueeze(dim=-1), 
+            target_positions_batch=target_positions.unsqueeze(dim=-1), 
+            tag="situation_encode"
+        )
+        high_actions = torch.zeros(
+            high_hidden_states.size(0), 1
+        ).long().to(device)
+
+        # get the intercepted dual hidden states.
+        for j in range(intervene_time):
+            high_hidden_states, _ = hi_model(
+                hmm_states=high_hidden_states, 
+                hmm_actions=high_actions, 
+                tag="_hmm_step_fxn"
+            )
+        true_target_positions = high_hidden_states+5
         # We need to chunk
         input_sequence = input_sequence[:,:input_max_seq_lens]
         target_sequence = target_sequence[:,:target_max_seq_lens]
@@ -140,15 +160,55 @@ def predict(
             token = output.max(dim=-1)[1]
 
             output_sequence.append(token.data[0].item())
+            
+            if decoding_iteration == intervene_time-1:
+                # we need to evaluate our position pred as well.
+                
+                x_s_idx = 0
+                y_s_idx = intervene_dimension_size
+                y_e_idx = 2*intervene_dimension_size
+                
+                cf_target_positions_x = model(
+                    position_hidden=hidden[0][:,:,x_s_idx:y_s_idx].squeeze(dim=1),
+                    cf_auxiliary_task_tag="x",
+                    tag="cf_auxiliary_task"
+                )
+                cf_target_positions_x = F.log_softmax(cf_target_positions_x, dim=-1)
+                cf_target_positions_y = model(
+                    position_hidden=hidden[0][:,:,y_s_idx:y_e_idx].squeeze(dim=1),
+                    cf_auxiliary_task_tag="y",
+                    tag="cf_auxiliary_task"
+                )
+                cf_target_positions_y = F.log_softmax(cf_target_positions_y, dim=-1)
+                
+                loss_position_x = model(
+                    loss_pred_target_positions=cf_target_positions_x,
+                    loss_true_target_positions=true_target_positions[:,0],
+                    tag="cf_auxiliary_task_loss"
+                )
+                loss_position_y = model(
+                    loss_pred_target_positions=cf_target_positions_y,
+                    loss_true_target_positions=true_target_positions[:,1],
+                    tag="cf_auxiliary_task_loss"
+                )
+                # some metrics
+                metrics_position_x = model(
+                    loss_pred_target_positions=cf_target_positions_x,
+                    loss_true_target_positions=true_target_positions[:,0],
+                    tag="cf_auxiliary_task_metrics"
+                )
+                metrics_position_y = model(
+                    loss_pred_target_positions=cf_target_positions_y,
+                    loss_true_target_positions=true_target_positions[:,1],
+                    tag="cf_auxiliary_task_metrics"
+                )
             decoding_iteration += 1
 
         if output_sequence[-1] == eos_idx:
             output_sequence.pop()
-        if model(tag="auxiliary_task"):
-            pass
-        else:
-            auxiliary_accuracy_agent, auxiliary_accuracy_target = 0, 0
-        yield (input_sequence, output_sequence, target_sequence, auxiliary_accuracy_target)
+
+        auxiliary_accuracy_agent, auxiliary_accuracy_target = 0, 0
+        yield (input_sequence, output_sequence, target_sequence, auxiliary_accuracy_target, metrics_position_x, metrics_position_y)
 
     elapsed_time = time.time() - start_time
     logging.info("Predicted for {} examples.".format(i))
@@ -161,26 +221,37 @@ def predict(
 def evaluate(
     data_iterator,
     model, 
+    hi_model,
     max_decoding_steps, 
     pad_idx,
     sos_idx,
     eos_idx,
     max_examples_to_evaluate,
-    device
+    device,
+    intervene_time,
+    intervene_dimension_size,
 ):
     accuracies = []
     target_accuracies = []
     exact_match = 0
-    for input_sequence, output_sequence, target_sequence, aux_acc_target in predict(
-            data_iterator=data_iterator, model=model, max_decoding_steps=max_decoding_steps, pad_idx=pad_idx,
-            sos_idx=sos_idx, eos_idx=eos_idx, max_examples_to_evaluate=max_examples_to_evaluate, device=device):
+    all_metrics_position_x = [] 
+    all_metrics_position_y = []
+    for input_sequence, output_sequence, target_sequence, aux_acc_target, metrics_position_x, metrics_position_y in predict(
+            data_iterator=data_iterator, model=model, hi_model=hi_model, max_decoding_steps=max_decoding_steps, pad_idx=pad_idx,
+            sos_idx=sos_idx, eos_idx=eos_idx, max_examples_to_evaluate=max_examples_to_evaluate, device=device,
+            intervene_time=intervene_time, intervene_dimension_size=intervene_dimension_size,
+    ):
         accuracy = sequence_accuracy(output_sequence, target_sequence[0].tolist()[1:-1])
         if accuracy == 100:
             exact_match += 1
         accuracies.append(accuracy)
         target_accuracies.append(aux_acc_target)
+        all_metrics_position_x.append(metrics_position_x.tolist())
+        all_metrics_position_y.append(metrics_position_y.tolist())
     return (float(np.mean(np.array(accuracies))), (exact_match / len(accuracies)) * 100,
-            float(np.mean(np.array(target_accuracies))))
+            float(np.mean(np.array(target_accuracies))), float(np.mean(np.array(all_metrics_position_x))), 
+            float(np.mean(np.array(all_metrics_position_y)))
+           )
 
 
 # In[4]:
@@ -234,7 +305,8 @@ def train(
     is_wandb: bool,
     intervene_attribute: int,
     intervene_time: int,
-    intervene_dimenssion_size: int,
+    intervene_dimension_size: int,
+    include_cf_auxiliary_loss: bool,
     max_training_examples=None, 
     seed=42,
     **kwargs
@@ -253,7 +325,7 @@ def train(
     
     from pathlib import Path
     # the output directory name is generated on-the-fly.
-    run_name = f"{run_name}_seed_{seed}_cf_loss_{include_cf_loss}_task_loss_{include_task_loss}_cf_weight_{cf_loss_weight}_cf_p_{cf_sample_p}"
+    run_name = f"{run_name}_seed_{seed}_time_{intervene_time}_"               f"attr_{intervene_attribute}_size_{intervene_dimension_size}_aux_loss_{include_cf_auxiliary_loss}"
     output_directory = os.path.join(output_directory, run_name)
     cfg["output_directory"] = output_directory
     logger.info(f"Create the output directory if not exist: {output_directory}")
@@ -312,6 +384,10 @@ def train(
     test_set.shuffle_data()
     logger.info("Done Loading Dev. set.")
     
+    # some important variables.
+    grid_size = training_set.grid_size
+    target_position_size = 2*grid_size - 1
+    
     # create modell based on our dataset.
     model = Model(input_vocabulary_size=training_set.input_vocabulary_size,
                   target_vocabulary_size=training_set.target_vocabulary_size,
@@ -319,6 +395,7 @@ def train(
                   input_padding_idx=training_set.input_vocabulary.pad_idx,
                   target_pad_idx=training_set.target_vocabulary.pad_idx,
                   target_eos_idx=training_set.target_vocabulary.eos_idx,
+                  target_position_size=target_position_size,
                   **cfg)
     
     # gpu setups
@@ -327,6 +404,10 @@ def train(
     n_gpu = torch.cuda.device_count()
     logger.info(f"device: {device}, and we recognize {n_gpu} gpu(s) in total.")
 
+    if use_cuda and n_gpu > 1:
+        model = torch.nn.DataParallel(model)
+    model.to(device)
+    
     # optimizer
     log_parameters(model)
     trainable_parameters = [parameter for parameter in model.parameters() if parameter.requires_grad]
@@ -341,10 +422,12 @@ def train(
     best_accuracy = 0
     best_exact_match = -99
     best_loss = float('inf')
+    
+    # this is important for curriculum training.
     if resume_from_file:
         assert os.path.isfile(resume_from_file), "No checkpoint found at {}".format(resume_from_file)
         logger.info("Loading checkpoint from file at '{}'".format(resume_from_file))
-        optimizer_state_dict = model.load_model(resume_from_file)
+        optimizer_state_dict = model.load_model(device, resume_from_file)
         optimizer.load_state_dict(optimizer_state_dict)
         start_iteration = model.trained_iterations
         logger.info("Loaded checkpoint '{}' (iter {})".format(resume_from_file, start_iteration))
@@ -355,10 +438,7 @@ def train(
     train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.training_batch_size)
     test_data, _ = test_set.get_dual_dataset()
     test_dataloader = DataLoader(test_data, batch_size=args.test_batch_size, shuffle=False)
-    
-    if use_cuda and n_gpu > 1:
-        model = torch.nn.DataParallel(model)
-    model.to(device)
+
     # graphical model
     train_max_decoding_steps = int(training_set.get_max_seq_length_target())
     logger.info(f"==== WARNING ====")
@@ -407,9 +487,9 @@ def train(
     controlled_random_time = False
     if intervene_attribute == -2:
         controlled_random_attr = True
-    if intervene_time == -2:
+    if intervene_time < -1:
         controlled_random_time = True
-        
+    raw_intervene_time = intervene_time
     while training_iteration < max_training_iterations:
 
         # Shuffle the dataset and loop over it.
@@ -448,9 +528,10 @@ def train(
             dual_input_lengths_batch = dual_input_lengths_batch.to(device)
             dual_target_lengths_batch = dual_target_lengths_batch.to(device)
             
+            loss = None
             task_loss = None
             cf_loss = None
-            
+            cf_position_loss = None
             # Main task loss first!
             '''
             We calculate this loss using the pytorch module, 
@@ -520,8 +601,11 @@ def train(
                 intervene_attribute = random.choice([0,1,2])
                 
             if controlled_random_time:
-                # special case: we only look at time step 1 and 2 and 3!
-                intervene_time = random.choice([1,2,3])
+                intervene_time_choice = []
+                for i in range(-1*raw_intervene_time):
+                    intervene_time_choice += [i+1]
+                # special case: we only look at time step 1 and 2!
+                intervene_time = random.choice(intervene_time_choice)
                 intervene_with_time = intervene_time
             elif random_time:
                 intervene_time = random.randint(
@@ -587,6 +671,10 @@ def train(
                         hmm_actions=cf_high_actions, 
                         tag="_hmm_step_fxn"
                     )
+                    # we also include a probe loss.
+                    if include_cf_auxiliary_loss:
+                        true_target_positions = dual_high_hidden_states+5
+
                     # only swap out this part.
                     cf_high_hidden_states[:,intervene_attribute] = dual_high_hidden_states[:,intervene_attribute]
                     # cf_high_hidden_states = dual_high_hidden_states
@@ -691,6 +779,8 @@ def train(
                 dual_target_batch = dual_target_batch[idx_selected]
                 intervened_target_lengths_batch = intervened_target_lengths_batch[idx_selected]
                 intervened_target_batch = intervened_target_batch[idx_selected]
+                if include_cf_auxiliary_loss:
+                    true_target_positions = true_target_positions[idx_selected]
                 
                 # we use the main hidden to track.
                 encoded_image = model(
@@ -769,9 +859,51 @@ def train(
                             lstm_projected_keys_visual=projected_keys_visual,
                             tag="_lstm_step_fxn"
                         )
+                        # we also include a probe loss.
+                        if include_cf_auxiliary_loss:
+                            x_s_idx = 0
+                            y_s_idx = intervene_dimension_size
+                            y_e_idx = 2*intervene_dimension_size
+                            cf_target_positions_x = model(
+                                position_hidden=dual_hidden[0][:,:,x_s_idx:y_s_idx].squeeze(dim=1),
+                                cf_auxiliary_task_tag="x",
+                                tag="cf_auxiliary_task"
+                            )
+                            cf_target_positions_x = F.log_softmax(cf_target_positions_x, dim=-1)
+                            cf_target_positions_y = model(
+                                position_hidden=dual_hidden[0][:,:,y_s_idx:y_e_idx].squeeze(dim=1),
+                                cf_auxiliary_task_tag="y",
+                                tag="cf_auxiliary_task"
+                            )
+                            cf_target_positions_y = F.log_softmax(cf_target_positions_y, dim=-1)
+                            loss_position_x = model(
+                                loss_pred_target_positions=cf_target_positions_x,
+                                loss_true_target_positions=true_target_positions[:,0],
+                                tag="cf_auxiliary_task_loss"
+                            )
+                            loss_position_y = model(
+                                loss_pred_target_positions=cf_target_positions_y,
+                                loss_true_target_positions=true_target_positions[:,1],
+                                tag="cf_auxiliary_task_loss"
+                            )
+                            cf_position_loss = loss_position_x + loss_position_y
+                            if use_cuda and n_gpu > 1:
+                                cf_position_loss = cf_position_loss.mean() # mean() to average on multi-gpu.
+                            # some metrics
+                            metrics_position_x = model(
+                                loss_pred_target_positions=cf_target_positions_x,
+                                loss_true_target_positions=true_target_positions[:,0],
+                                tag="cf_auxiliary_task_metrics"
+                            )
+                            metrics_position_y = model(
+                                loss_pred_target_positions=cf_target_positions_y,
+                                loss_true_target_positions=true_target_positions[:,1],
+                                tag="cf_auxiliary_task_metrics"
+                            )
+                            
                         # intervene!
-                        s_idx = intervene_attribute*intervene_dimenssion_size
-                        e_idx = (intervene_attribute+1)*intervene_dimenssion_size
+                        s_idx = intervene_attribute*intervene_dimension_size
+                        e_idx = (intervene_attribute+1)*intervene_dimension_size
                         cf_hidden[0][:,:,s_idx:e_idx] = dual_hidden[0][:,:,s_idx:e_idx] # only swap out this part.
                         # WARNING: this is a special way to bypassing the state
                         # updates during intervention!
@@ -817,6 +949,12 @@ def train(
                 assert cf_loss != None
                 loss = cf_loss
 
+            if include_cf_auxiliary_loss:
+                if loss != None:
+                    loss += cf_position_loss
+                else:
+                    loss = cf_position_loss
+                
             # Backward pass and update model parameters.
             loss.backward()
             optimizer.step()
@@ -848,43 +986,49 @@ def train(
                     )
                 else:
                     cf_loss, cf_accuracy, cf_exact_match = 0.0, 0.0, 0.0
+                
+                if not include_cf_auxiliary_loss:
+                    metrics_position_x, metrics_position_y = 0.0, 0.0
+                    
                 learning_rate = scheduler.get_lr()[0]
-                logger.info("Iteration %08d, task loss %8.4f, cf loss %8.4f, accuracy %5.2f, exact match %5.2f, "
-                            "cf count %03d, cf accuracy %5.2f, cf exact match %5.2f,"
+                logger.info("Iteration %08d, task loss %8.4f, cf loss %8.4f, cf pos loss %8.4f, accuracy %5.2f, exact match %5.2f, "
+                            "cf count %03d, cf accuracy %5.2f, cf exact match %5.2f, cf pos_x %5.2f, cf pos_y %5.2f,"
                             " learning_rate %.5f" % (
-                                training_iteration, task_loss_to_write, cf_loss, accuracy, exact_match,
-                                len(idx_selected), cf_accuracy, cf_exact_match,
+                                training_iteration, task_loss_to_write, cf_loss, cf_position_loss, accuracy, exact_match,
+                                len(idx_selected), cf_accuracy, cf_exact_match, metrics_position_x, metrics_position_y,
                                 learning_rate,
                             ))
                 # logging to wandb.
                 if is_wandb:
-                    wandb.log({'training_iteration': training_iteration})
-                    wandb.log({'task_loss': task_loss_to_write})
-                    wandb.log({'task_accuracy': accuracy})
-                    wandb.log({'task_exact_match': exact_match})
+                    wandb.log({'train/training_iteration': training_iteration})
+                    wandb.log({'train/task_loss': task_loss_to_write})
+                    wandb.log({'train/task_accuracy': accuracy})
+                    wandb.log({'train/task_exact_match': exact_match})
                     if cf_loss and len(idx_selected) != 0:
-                        wandb.log({'counterfactual_loss': cf_loss})
-                        wandb.log({'counterfactual count': len(idx_selected)})
-                        wandb.log({'counterfactual_accuracy': cf_accuracy})
-                        wandb.log({'counterfactual_exact_match': cf_exact_match})
+                        wandb.log({'train/counterfactual_loss': cf_loss})
+                        wandb.log({'train/counterfactual count': len(idx_selected)})
+                        wandb.log({'train/counterfactual_accuracy': cf_accuracy})
+                        wandb.log({'train/counterfactual_exact_match': cf_exact_match})
                         intervene_time_record += [[intervene_time]]
                         intervene_attr_record += [[intervene_attribute]]
 
                         time_table = wandb.Table(data=intervene_time_record, columns=["intervene_time"])
-                        wandb.log({'intervene_time_dist': wandb.plot.histogram(time_table, "intervene_time",
+                        wandb.log({'train/intervene_time_dist': wandb.plot.histogram(time_table, "intervene_time",
                                                    title="Histogram")})
                         attr_table = wandb.Table(data=intervene_attr_record, columns=["intervene_attr"])
-                        wandb.log({'intervene_attr_dist': wandb.plot.histogram(attr_table, "intervene_attr",
+                        wandb.log({'train/intervene_attr_dist': wandb.plot.histogram(attr_table, "intervene_attr",
                                                    title="Histogram")})
                         time_cross_match_record += [[intervene_time, cf_exact_match]]
                         time_cross_match_table = wandb.Table(data=time_cross_match_record, columns = ["intervene_time", "cf_exact_match"])
-                        wandb.log({"time_cross_match_table" : wandb.plot.scatter(time_cross_match_table, "intervene_time", "cf_exact_match")})
+                        wandb.log({"train/time_cross_match_table" : wandb.plot.scatter(time_cross_match_table, "intervene_time", "cf_exact_match")})
 
                         attr_cross_match_record += [[intervene_attribute, cf_exact_match]]
                         attr_cross_match_table = wandb.Table(data=attr_cross_match_record, columns = ["intervene_attribute", "cf_exact_match"])
-                        wandb.log({"attr_cross_match_table" : wandb.plot.scatter(attr_cross_match_table, "intervene_attribute", "cf_exact_match")})
-
-                    wandb.log({'learning_rate': learning_rate})
+                        wandb.log({"train/attr_cross_match_table" : wandb.plot.scatter(attr_cross_match_table, "intervene_attribute", "cf_exact_match")})
+                    if include_cf_auxiliary_loss and len(idx_selected) != 0:
+                        wandb.log({'train/pred_target_position_x': metrics_position_y})
+                        wandb.log({'train/pred_target_position_y': metrics_position_y})
+                    wandb.log({'train/learning_rate': learning_rate})
             # Evaluate on test set.
             """
             CAVEATS: we only evaluate with the main task loss for now.
@@ -897,16 +1041,26 @@ def train(
                 with torch.no_grad():
                     model.eval()
                     logger.info("Evaluating..")
-                    accuracy, exact_match, target_accuracy = evaluate(
-                        test_dataloader, model=model,
+                    accuracy, exact_match, target_accuracy, eval_metrics_position_x, eval_metrics_position_y = evaluate(
+                        test_dataloader, model=model, hi_model=hi_model,
                         max_decoding_steps=max_decoding_steps, pad_idx=test_set.target_vocabulary.pad_idx,
                         sos_idx=test_set.target_vocabulary.sos_idx,
                         eos_idx=test_set.target_vocabulary.eos_idx,
                         max_examples_to_evaluate=kwargs["max_testing_examples"],
-                        device=device
+                        device=device,
+                        intervene_time=intervene_time,
+                        intervene_dimension_size=intervene_dimension_size,
                     )
                     logger.info("  Evaluation Accuracy: %5.2f Exact Match: %5.2f "
-                                " Target Accuracy: %5.2f" % (accuracy, exact_match, target_accuracy))
+                                " Target Accuracy: %5.2f, CF POS X: %5.2f, CF POS Y: %5.2f  " % (
+                                    accuracy, exact_match, target_accuracy, 
+                                    eval_metrics_position_x, eval_metrics_position_y
+                                ))
+                    if is_wandb:
+                        wandb.log({'eval/accuracy': accuracy})
+                        wandb.log({'eval/exact_match': exact_match})
+                        wandb.log({'eval/pred_target_position_x': eval_metrics_position_x})
+                        wandb.log({'eval/pred_target_position_y': eval_metrics_position_y})
                     if exact_match > best_exact_match:
                         is_best = True
                         best_accuracy = accuracy
