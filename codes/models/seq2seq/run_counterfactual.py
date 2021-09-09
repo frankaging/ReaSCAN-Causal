@@ -146,14 +146,25 @@ def predict(
         decoding_iteration = 0
         attention_weights_commands = []
         attention_weights_situations = []
+
+        auxiliary_accuracy_agent, auxiliary_accuracy_target = 0, 0
+        metrics_position_x, metrics_position_y = None, None
+        
         while token != eos_idx and decoding_iteration <= max_decoding_steps:
+            
+            # we calculate the hidden state conditioned context embedding.
+            lstm_context_embedding = model(
+                lstm_hidden = hidden,
+                lstm_projected_keys_textual=projected_keys_textual,
+                lstm_commands_lengths=input_lengths,
+                lstm_projected_keys_visual=projected_keys_visual,
+                tag="_lstm_generate_context_embedding"
+            )
             
             (output, hidden) = model(
                 lstm_input_tokens_sorted=token,
                 lstm_hidden=hidden,
-                lstm_projected_keys_textual=projected_keys_textual,
-                lstm_commands_lengths=input_lengths,
-                lstm_projected_keys_visual=projected_keys_visual,
+                lstm_context_embedding=lstm_context_embedding,
                 tag="_lstm_step_fxn"
             )
             output = F.log_softmax(output, dim=-1)
@@ -162,8 +173,6 @@ def predict(
             output_sequence.append(token.data[0].item())
             
             if decoding_iteration == intervene_time-1:
-                # we need to evaluate our position pred as well.
-                
                 x_s_idx = 0
                 y_s_idx = intervene_dimension_size
                 y_e_idx = 2*intervene_dimension_size
@@ -176,7 +185,7 @@ def predict(
                 cf_target_positions_x = F.log_softmax(cf_target_positions_x, dim=-1)
                 cf_target_positions_y = model(
                     position_hidden=hidden[0][:,:,y_s_idx:y_e_idx].squeeze(dim=1),
-                    cf_auxiliary_task_tag="y",
+                    cf_auxiliary_task_tag="x",
                     tag="cf_auxiliary_task"
                 )
                 cf_target_positions_y = F.log_softmax(cf_target_positions_y, dim=-1)
@@ -202,12 +211,17 @@ def predict(
                     loss_true_target_positions=true_target_positions[:,1],
                     tag="cf_auxiliary_task_metrics"
                 )
+                
             decoding_iteration += 1
 
         if output_sequence[-1] == eos_idx:
             output_sequence.pop()
 
-        auxiliary_accuracy_agent, auxiliary_accuracy_target = 0, 0
+        if metrics_position_x == None:
+            metrics_position_x = torch.zeros(1)
+        if metrics_position_y == None:
+            metrics_position_y = torch.zeros(1)
+        
         yield (input_sequence, output_sequence, target_sequence, auxiliary_accuracy_target, metrics_position_x, metrics_position_y)
 
     elapsed_time = time.time() - start_time
@@ -563,16 +577,25 @@ def train(
             task_outputs = []
             for j in range(train_max_decoding_steps):
                 task_token = target_batch[:,j]
-                (task_output, task_hidden) = model(
-                    lstm_input_tokens_sorted=task_token,
-                    lstm_hidden=task_hidden,
+                
+                # we calculate the hidden state conditioned context embedding.
+                task_lstm_context_embedding = model(
+                    lstm_hidden = task_hidden,
                     lstm_projected_keys_textual=task_projected_keys_textual,
                     lstm_commands_lengths=input_lengths_batch,
                     lstm_projected_keys_visual=task_projected_keys_visual,
+                    tag="_lstm_generate_context_embedding"
+                )
+                
+                (task_output, task_hidden) = model(
+                    lstm_input_tokens_sorted=task_token,
+                    lstm_hidden=task_hidden,
+                    lstm_context_embedding=task_lstm_context_embedding,
                     tag="_lstm_step_fxn"
                 )
                 task_output = F.log_softmax(task_output, dim=-1)
                 task_outputs += [task_output]
+
             target_scores = torch.stack(task_outputs, dim=1)
             task_loss = model(
                 loss_target_scores=target_scores, 
@@ -659,10 +682,12 @@ def train(
             # main intervene for loop.
             cf_high_hidden_states = high_hidden_states
             cf_high_actions = high_actions
+            true_target_positions = []
             intervened_target_batch = [torch.ones(high_hidden_states.size(0), 1).long().to(device)] # SOS tokens
             intervened_target_lengths_batch = torch.zeros(high_hidden_states.size(0), 1).long().to(device)
+            intervened_max_decoding_steps = train_max_decoding_steps+5 # we decode more steps for intervened.
             # we need to take of the SOS and EOS tokens.
-            for j in range(train_max_decoding_steps-1):
+            for j in range(intervened_max_decoding_steps-1):
                 # intercept like antra!
                 if j == intervene_time-1:
                     # we need idle once by getting the states but not continue the HMM!
@@ -671,9 +696,6 @@ def train(
                         hmm_actions=cf_high_actions, 
                         tag="_hmm_step_fxn"
                     )
-                    # we also include a probe loss.
-                    if include_cf_auxiliary_loss:
-                        true_target_positions = dual_high_hidden_states+5
 
                     # only swap out this part.
                     cf_high_hidden_states[:,intervene_attribute] = dual_high_hidden_states[:,intervene_attribute]
@@ -686,6 +708,11 @@ def train(
                     # comment out two lines below if it is not for testing.
                     # cf_high_hidden_states = dual_high_hidden_states
                     # cf_high_actions = dual_high_actions
+                    # we also include a probe loss.
+                if include_cf_auxiliary_loss:
+                    true_target_position = cf_high_hidden_states+5
+                    true_target_positions += [true_target_position]
+
                 cf_high_hidden_states, cf_high_actions = hi_model(
                     hmm_states=cf_high_hidden_states, 
                     hmm_actions=cf_high_actions, 
@@ -695,10 +722,11 @@ def train(
                 intervened_target_batch += [cf_high_actions]
                 intervened_target_lengths_batch += (cf_high_actions!=0).long()
             intervened_target_lengths_batch += 2
+            true_target_positions = torch.stack(true_target_positions, dim=1)
             # we do not to increase the EOS for non-ending sequences
             for i in range(high_hidden_states.size(0)):
-                if intervened_target_lengths_batch[i,0] == train_max_decoding_steps+1:
-                    intervened_target_lengths_batch[i,0] = train_max_decoding_steps
+                if intervened_target_lengths_batch[i,0] == intervened_max_decoding_steps+1:
+                    intervened_target_lengths_batch[i,0] = intervened_max_decoding_steps
             intervened_target_batch = torch.cat(intervened_target_batch, dim=-1)
             for i in range(high_hidden_states.size(0)):
                 if intervened_target_batch[i,intervened_target_lengths_batch[i,0]-1] == 0:
@@ -706,8 +734,6 @@ def train(
             # intervened data.
             intervened_target_batch = intervened_target_batch.clone()
             intervened_target_lengths_batch = intervened_target_lengths_batch.clone()
-            # correct the length.
-            intervened_target_lengths_batch[intervened_target_lengths_batch>train_max_decoding_steps] = train_max_decoding_steps
 
             # DEBUG.
             two_right = 0
@@ -831,94 +857,99 @@ def train(
                     command_encoder_outputs=dual_encoder_outputs["encoder_outputs"],
                     tag="projected_keys_textual"
                 )
-
-                # get the intercepted dual hidden states.
+                
                 for j in range(intervene_with_time):
-                    (dual_output, dual_hidden) = model(
-                        lstm_input_tokens_sorted=dual_target_batch[:,j],
-                        lstm_hidden=dual_hidden,
+                    dual_lstm_context_embedding = model(
+                        lstm_hidden = dual_hidden,
                         lstm_projected_keys_textual=dual_projected_keys_textual,
                         lstm_commands_lengths=dual_input_lengths_batch,
                         lstm_projected_keys_visual=dual_projected_keys_visual,
+                        tag="_lstm_generate_context_embedding"
+                    )
+                    (dual_output, dual_hidden) = model(
+                        lstm_input_tokens_sorted=dual_target_batch[:,j],
+                        lstm_hidden=dual_hidden,
+                        lstm_context_embedding=dual_lstm_context_embedding,
                         tag="_lstm_step_fxn"
                     )
                 
                 # main intervene for loop.
                 cf_hidden = main_hidden
                 cf_outputs = []
+                cf_position_x_outputs = []
+                cf_position_y_outputs = []
                 for j in range(intervened_target_batch.shape[1]):
                     cf_token=intervened_target_batch[:,j]
+                    # we calculate the hidden state conditioned context embedding.
+                    cf_lstm_context_embedding = model(
+                        lstm_hidden = cf_hidden,
+                        lstm_projected_keys_textual=projected_keys_textual,
+                        lstm_commands_lengths=input_lengths_batch,
+                        lstm_projected_keys_visual=projected_keys_visual,
+                        tag="_lstm_generate_context_embedding"
+                    )
                     # intercept like antra!
                     if j == intervene_time-1:
+                        s_idx = intervene_attribute*intervene_dimension_size
+                        e_idx = (intervene_attribute+1)*intervene_dimension_size
+                        
+                        # Intervene on context embedding
+                        # cf_lstm_context_embedding = torch.cat(
+                        #     [
+                        #         cf_lstm_context_embedding[:,:,:s_idx],
+                        #         dual_lstm_context_embedding[:,:,s_idx:e_idx],
+                        #         cf_lstm_context_embedding[:,:,e_idx:]
+                        #     ],dim=-1
+                        # )
+                        # Intervene on hidden states.
                         # we need idle once by getting the states but not continue the HMM!
                         (_, cf_hidden) = model(
                             lstm_input_tokens_sorted=cf_token,
                             lstm_hidden=cf_hidden,
-                            lstm_projected_keys_textual=projected_keys_textual,
-                            lstm_commands_lengths=input_lengths_batch,
-                            lstm_projected_keys_visual=projected_keys_visual,
+                            lstm_context_embedding=cf_lstm_context_embedding,
                             tag="_lstm_step_fxn"
                         )
-                        # we also include a probe loss.
-                        if include_cf_auxiliary_loss:
-                            x_s_idx = 0
-                            y_s_idx = intervene_dimension_size
-                            y_e_idx = 2*intervene_dimension_size
-                            cf_target_positions_x = model(
-                                position_hidden=dual_hidden[0][:,:,x_s_idx:y_s_idx].squeeze(dim=1),
-                                cf_auxiliary_task_tag="x",
-                                tag="cf_auxiliary_task"
-                            )
-                            cf_target_positions_x = F.log_softmax(cf_target_positions_x, dim=-1)
-                            cf_target_positions_y = model(
-                                position_hidden=dual_hidden[0][:,:,y_s_idx:y_e_idx].squeeze(dim=1),
-                                cf_auxiliary_task_tag="y",
-                                tag="cf_auxiliary_task"
-                            )
-                            cf_target_positions_y = F.log_softmax(cf_target_positions_y, dim=-1)
-                            loss_position_x = model(
-                                loss_pred_target_positions=cf_target_positions_x,
-                                loss_true_target_positions=true_target_positions[:,0],
-                                tag="cf_auxiliary_task_loss"
-                            )
-                            loss_position_y = model(
-                                loss_pred_target_positions=cf_target_positions_y,
-                                loss_true_target_positions=true_target_positions[:,1],
-                                tag="cf_auxiliary_task_loss"
-                            )
-                            cf_position_loss = loss_position_x + loss_position_y
-                            if use_cuda and n_gpu > 1:
-                                cf_position_loss = cf_position_loss.mean() # mean() to average on multi-gpu.
-                            # some metrics
-                            metrics_position_x = model(
-                                loss_pred_target_positions=cf_target_positions_x,
-                                loss_true_target_positions=true_target_positions[:,0],
-                                tag="cf_auxiliary_task_metrics"
-                            )
-                            metrics_position_y = model(
-                                loss_pred_target_positions=cf_target_positions_y,
-                                loss_true_target_positions=true_target_positions[:,1],
-                                tag="cf_auxiliary_task_metrics"
-                            )
-                            
-                        # intervene!
-                        s_idx = intervene_attribute*intervene_dimension_size
-                        e_idx = (intervene_attribute+1)*intervene_dimension_size
+#                         updated_hidden = torch.cat(
+#                             [
+#                                 cf_hidden[0][:,:,:s_idx],
+#                                 dual_hidden[0][:,:,s_idx:e_idx],
+#                                 cf_hidden[0][:,:,e_idx:]
+#                             ],dim=-1
+#                         )
+#                         cf_hidden = (updated_hidden, cf_hidden[1])
                         cf_hidden[0][:,:,s_idx:e_idx] = dual_hidden[0][:,:,s_idx:e_idx] # only swap out this part.
                         # WARNING: this is a special way to bypassing the state
                         # updates during intervention!
                         cf_token = None
+
+                    # probing loss is for every time step.
+                    if include_cf_auxiliary_loss and j == intervene_time-1:
+                        x_s_idx = 0
+                        y_s_idx = intervene_dimension_size
+                        y_e_idx = 2*intervene_dimension_size
+                        cf_target_positions_x = model(
+                            position_hidden=cf_hidden[0][:,:,x_s_idx:y_s_idx].squeeze(dim=1),
+                            cf_auxiliary_task_tag="x",
+                            tag="cf_auxiliary_task"
+                        )
+                        cf_target_positions_x = F.log_softmax(cf_target_positions_x, dim=-1)
+                        cf_position_x_outputs += [cf_target_positions_x]
+                        cf_target_positions_y = model(
+                            position_hidden=cf_hidden[0][:,:,y_s_idx:y_e_idx].squeeze(dim=1),
+                            cf_auxiliary_task_tag="x", # TODO: we intentially use a single linear layer to repr.
+                            tag="cf_auxiliary_task"
+                        )
+                        cf_target_positions_y = F.log_softmax(cf_target_positions_y, dim=-1)
+                        cf_position_y_outputs += [cf_target_positions_y]
+
                     (cf_output, cf_hidden) = model(
                         lstm_input_tokens_sorted=cf_token,
                         lstm_hidden=cf_hidden,
-                        lstm_projected_keys_textual=projected_keys_textual,
-                        lstm_commands_lengths=input_lengths_batch,
-                        lstm_projected_keys_visual=projected_keys_visual,
+                        lstm_context_embedding=cf_lstm_context_embedding,
                         tag="_lstm_step_fxn"
                     )
                     # record the output for loss calculation.
-                    cf_output = cf_output.unsqueeze(0)
-                    cf_outputs += [cf_output]
+                    cf_outputs += [cf_output.unsqueeze(0)]
                 cf_outputs = torch.cat(cf_outputs, dim=0)
                 intervened_scores_batch = cf_outputs.transpose(0, 1) # [batch_size, max_target_seq_length, target_vocabulary_size]
                 
@@ -931,7 +962,45 @@ def train(
                 )
                 if use_cuda and n_gpu > 1:
                     cf_loss = cf_loss.mean() # mean() to average on multi-gpu.
-
+                
+                if len(cf_position_x_outputs) != 0 and len(cf_position_y_outputs) != 0:
+                    # we need to include this in the loss term.
+                    cf_position_x_outputs = torch.stack(cf_position_x_outputs, dim=1)
+                    cf_position_y_outputs = torch.stack(cf_position_y_outputs, dim=1)
+                    tp_b, tp_sl, tp_d = true_target_positions.shape
+                    _, _, tp_hd = cf_position_x_outputs.shape
+                    cf_position_x_outputs = cf_position_x_outputs[:,:tp_sl]
+                    cf_position_y_outputs = cf_position_y_outputs[:,:tp_sl]
+                    cf_position_x_outputs = cf_position_x_outputs.reshape(-1, tp_hd).contiguous()
+                    cf_position_y_outputs = cf_position_y_outputs.reshape(-1, tp_hd).contiguous()
+                    true_target_positions = true_target_positions[:,intervene_time-1] # only for the first time step
+                    true_target_positions = true_target_positions.reshape(-1, tp_d).contiguous()
+                    
+                    loss_position_x = model(
+                        loss_pred_target_positions=cf_position_x_outputs,
+                        loss_true_target_positions=true_target_positions[:,0],
+                        tag="cf_auxiliary_task_loss"
+                    )
+                    loss_position_y = model(
+                        loss_pred_target_positions=cf_position_y_outputs,
+                        loss_true_target_positions=true_target_positions[:,1],
+                        tag="cf_auxiliary_task_loss"
+                    )
+                    cf_position_loss = loss_position_x + loss_position_y
+                    if use_cuda and n_gpu > 1:
+                        cf_position_loss = cf_position_loss.mean() # mean() to average on multi-gpu.
+                    # some metrics
+                    metrics_position_x = model(
+                        loss_pred_target_positions=cf_position_x_outputs,
+                        loss_true_target_positions=true_target_positions[:,0],
+                        tag="cf_auxiliary_task_metrics"
+                    )
+                    metrics_position_y = model(
+                        loss_pred_target_positions=cf_position_y_outputs,
+                        loss_true_target_positions=true_target_positions[:,1],
+                        tag="cf_auxiliary_task_metrics"
+                    )
+                
             #####################
             #
             # low data end
@@ -988,7 +1057,7 @@ def train(
                     cf_loss, cf_accuracy, cf_exact_match = 0.0, 0.0, 0.0
                 
                 if not include_cf_auxiliary_loss:
-                    metrics_position_x, metrics_position_y = 0.0, 0.0
+                    cf_position_loss, metrics_position_x, metrics_position_y = 0.0, 0.0, 0.0
                     
                 learning_rate = scheduler.get_lr()[0]
                 logger.info("Iteration %08d, task loss %8.4f, cf loss %8.4f, cf pos loss %8.4f, accuracy %5.2f, exact match %5.2f, "

@@ -164,12 +164,19 @@ def predict(
         attention_weights_situations = []
         while token != eos_idx and decoding_iteration <= max_decoding_steps:
             
-            (output, hidden) = model(
-                lstm_input_tokens_sorted=token,
-                lstm_hidden=hidden,
+            # we calculate the hidden state conditioned context embedding.
+            lstm_context_embedding = model(
+                lstm_hidden = hidden,
                 lstm_projected_keys_textual=projected_keys_textual,
                 lstm_commands_lengths=input_lengths,
                 lstm_projected_keys_visual=projected_keys_visual,
+                tag="_lstm_generate_context_embedding"
+            )
+            
+            (output, hidden) = model(
+                lstm_input_tokens_sorted=token,
+                lstm_hidden=hidden,
+                lstm_context_embedding=lstm_context_embedding,
                 tag="_lstm_step_fxn"
             )
             output = F.log_softmax(output, dim=-1)
@@ -193,7 +200,7 @@ def predict(
                 cf_target_positions_x = F.log_softmax(cf_target_positions_x, dim=-1)
                 cf_target_positions_y = model(
                     position_hidden=hidden[0][:,:,y_s_idx:y_e_idx].squeeze(dim=1),
-                    cf_auxiliary_task_tag="y",
+                    cf_auxiliary_task_tag="x", # use the same linear layer.
                     tag="cf_auxiliary_task"
                 )
                 cf_target_positions_y = F.log_softmax(cf_target_positions_y, dim=-1)
@@ -512,6 +519,13 @@ def counterfactual_predict(
         # Iteratively decode the output.
         token = torch.tensor([sos_idx], dtype=torch.long, device=device)
         for j in range(intervene_with_time):
+            dual_lstm_context_embedding = model(
+                lstm_hidden = dual_hidden,
+                lstm_projected_keys_textual=dual_projected_keys_textual,
+                lstm_commands_lengths=dual_input_lengths_batch,
+                lstm_projected_keys_visual=dual_projected_keys_visual,
+                tag="_lstm_generate_context_embedding"
+            )
             (dual_ouput, dual_hidden) = model(
                 lstm_input_tokens_sorted=token,
                 lstm_hidden=dual_hidden,
@@ -530,25 +544,35 @@ def counterfactual_predict(
         output_sequence = []
         cf_token = torch.tensor([sos_idx], dtype=torch.long, device=device)
         decoding_iteration = 0
-        
         cf_hidden = main_hidden
         # while cf_token != eos_idx and decoding_iteration < max_decoding_steps:
         for decoding_iteration in range(intervened_target_batch.shape[1]):
             # this is for testing.
-            # cf_token=intervened_target_batch[:,decoding_iteration]
+            cf_lstm_context_embedding = model(
+                lstm_hidden = cf_hidden,
+                lstm_projected_keys_textual=projected_keys_textual,
+                lstm_commands_lengths=input_lengths_batch,
+                lstm_projected_keys_visual=projected_keys_visual,
+                tag="_lstm_generate_context_embedding"
+            )
             if decoding_iteration == intervene_time-1:
                 # we need idle once by getting the states but not continue the HMM!
                 (_, cf_hidden) = model(
                     lstm_input_tokens_sorted=cf_token,
                     lstm_hidden=cf_hidden,
-                    lstm_projected_keys_textual=projected_keys_textual,
-                    lstm_commands_lengths=input_lengths_batch,
-                    lstm_projected_keys_visual=projected_keys_visual,
+                    lstm_context_embedding=cf_lstm_context_embedding,
                     tag="_lstm_step_fxn"
                 )
                 s_idx = intervene_attribute*intervene_dimension_size
                 e_idx = (intervene_attribute+1)*intervene_dimension_size
-                cf_hidden[0][:,:,s_idx:e_idx] = dual_hidden[0][:,:,s_idx:e_idx] # only swap out this part.
+                updated_hidden = torch.cat(
+                    [
+                        cf_hidden[0][:,:,:s_idx],
+                        dual_hidden[0][:,:,s_idx:e_idx],
+                        cf_hidden[0][:,:,e_idx:]
+                    ],dim=-1
+                )
+                cf_hidden = (updated_hidden, cf_hidden[1])
                 # WARNING: this is a special way to bypassing the state
                 # updates during intervention!
                 cf_token = None

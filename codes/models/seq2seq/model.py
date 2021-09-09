@@ -87,6 +87,7 @@ class Model(nn.Module):
         else:
             raise ValueError("Unknown attention type {} specified.".format(attention_type))
         self.decoder_hidden_init = nn.Linear(3*decoder_hidden_size, decoder_hidden_size)
+        self.decoder_cell_init = nn.Linear(3*decoder_hidden_size, decoder_hidden_size)
         
         # We use these two variables to encode target and agent position offsets.
         # Be careful that this is NOT the x, y for the target, IT IS the relative 
@@ -233,6 +234,7 @@ class Model(nn.Module):
                 lstm_projected_keys_textual=None,
                 lstm_commands_lengths=None,
                 lstm_projected_keys_visual=None,
+                lstm_context_embedding=None,
                 # loss
                 loss_target_scores=None,
                 loss_target_batch=None,
@@ -328,8 +330,25 @@ class Model(nn.Module):
             return self.textual_attention.key_layer(
                 command_encoder_outputs
             )  # [max_input_length, batch_size, dec_hidden_dim]
+        elif tag == "_lstm_generate_context_embedding":
+            # we are doing this lstm only step now to separate out the context
+            # embeddings.
+            return self.attention_decoder.generate_context(
+                lstm_hidden,
+                lstm_projected_keys_textual,
+                lstm_commands_lengths,
+                lstm_projected_keys_visual,
+            )
         elif tag == "_lstm_step_fxn":
+            # we are doing this lstm only step now to separate out the context
+            # embeddings.
             return self.attention_decoder.forward_step(
+                lstm_input_tokens_sorted,
+                lstm_hidden,
+                lstm_context_embedding,
+            )
+        elif tag == "_lstm_step_fxn_deprecated":
+            return self.attention_decoder.forward_step_deprecated(
                 lstm_input_tokens_sorted,
                 lstm_hidden,
                 lstm_projected_keys_textual,
@@ -350,37 +369,22 @@ class Model(nn.Module):
             projected_keys_textual = self.textual_attention.key_layer(
                 encoder_outputs["encoder_outputs"])  # [max_input_length, batch_size, dec_hidden_dim]
             
+            projected_keys_visual = projected_keys_visual.mean(dim=1, keepdim=True)
+            projected_keys_textual = projected_keys_textual.mean(dim=1, keepdim=True)
+
             # intialize the hidden states.
             initial_hidden = self.attention_decoder.initialize_hidden(
                 self.tanh(self.enc_hidden_to_dec_hidden(command_hidden)))
             initial_hidden, initial_cell = initial_hidden
             
-            # further contextualize hidden states.
-            context_command, _ = self.attention_decoder.textual_attention(
-                queries=initial_hidden, projected_keys=projected_keys_textual,
-                values=projected_keys_textual, memory_lengths=encoder_outputs["sequence_lengths"]
-            )
-            # update hidden states here with conditioned image
-            batch_size, image_num_memory, _ = projected_keys_textual.size()
-            situation_lengths = torch.tensor(
-                [image_num_memory for _ in range(batch_size)]
-            ).long().to(device=commands_input.device)
-            if self.attention_decoder.conditional_attention:
-                queries = torch.cat([initial_hidden, context_command], dim=-1)
-                queries = self.attention_decoder.tanh(self.attention_decoder.queries_to_keys(queries))
-            else:
-                queries = initial_hidden
-            context_situation, _ = self.attention_decoder.visual_attention(
-                queries=queries, projected_keys=projected_keys_visual,
-                values=projected_keys_visual, memory_lengths=situation_lengths.unsqueeze(dim=-1))
-            # context : [batch_size, 1, hidden_size]
-            # attention_weights : [batch_size, 1, max_input_length]
-            
             # get the initial hidden states
-            context_embedding = torch.cat([initial_hidden, context_command, context_situation], dim=-1)
+            context_embedding = torch.cat([initial_hidden, projected_keys_visual, command_hidden.unsqueeze(dim=1)], dim=-1)
             hidden_init = self.decoder_hidden_init(context_embedding)
             
-            return (hidden_init.transpose(0, 1), initial_cell.transpose(0, 1))
+            cell_embedding = torch.cat([initial_cell, projected_keys_visual, command_hidden.unsqueeze(dim=1)], dim=-1)
+            cell_init = self.decoder_cell_init(cell_embedding)
+            
+            return (hidden_init.transpose(0, 1), cell_init.transpose(0, 1))
         elif tag == "_lstm_step_fxn_ib":
             if lstm_input_tokens_sorted == None:
                 # this code path is reserved for intervention ONLY!
@@ -408,7 +412,7 @@ class Model(nn.Module):
                 ) # [batch_size, 1, output_size]
                 output = output.squeeze(dim=1)   # [batch_size, output_size]
                 
-                return hidden, output
+                return output, hidden
         elif tag == "loss":
             return self.get_loss(loss_target_scores, loss_target_batch)
         elif tag == "update_state":

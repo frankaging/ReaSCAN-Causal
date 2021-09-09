@@ -96,7 +96,7 @@ def predict(
             situations_input=situation,
             tag="situation_encode"
         )
-        hidden, encoder_outputs = model(
+        command_hidden, encoder_outputs = model(
             commands_input=input_sequence, 
             commands_lengths=input_lengths,
             tag="command_input_encode_no_dict"
@@ -104,7 +104,7 @@ def predict(
 
         # DECODER INIT
         hidden = model(
-            command_hidden=hidden,
+            command_hidden=command_hidden,
             tag="initialize_hidden"
         )
         projected_keys_visual = model(
@@ -123,14 +123,22 @@ def predict(
         decoding_iteration = 0
         while token != eos_idx and decoding_iteration <= max_decoding_steps:
             
-            (output, hidden) = model(
-                lstm_input_tokens_sorted=token,
-                lstm_hidden=hidden,
+            # we calculate the hidden state conditioned context embedding.
+            lstm_context_embedding = model(
+                lstm_hidden = hidden,
                 lstm_projected_keys_textual=projected_keys_textual,
                 lstm_commands_lengths=input_lengths,
                 lstm_projected_keys_visual=projected_keys_visual,
+                tag="_lstm_generate_context_embedding"
+            )
+            
+            (output, hidden) = model(
+                lstm_input_tokens_sorted=token,
+                lstm_hidden=hidden,
+                lstm_context_embedding=lstm_context_embedding,
                 tag="_lstm_step_fxn"
             )
+            
             output = F.log_softmax(output, dim=-1)
             token = output.max(dim=-1)[1]
 
@@ -139,10 +147,8 @@ def predict(
 
         if output_sequence[-1] == eos_idx:
             output_sequence.pop()
-        if model(tag="auxiliary_task"):
-            pass
-        else:
-            auxiliary_accuracy_agent, auxiliary_accuracy_target = 0, 0
+
+        auxiliary_accuracy_agent, auxiliary_accuracy_target = 0, 0
         yield (input_sequence, output_sequence, target_sequence, auxiliary_accuracy_target)
 
     elapsed_time = time.time() - start_time
@@ -217,6 +223,7 @@ def train(
     weight_target_loss: float, 
     attention_type: str, 
     k: int, 
+    is_wandb: bool,
     max_training_examples=None, 
     seed=42, **kwargs
 ):
@@ -233,6 +240,17 @@ def train(
     cfg["output_directory"] = output_directory
     logger.info(f"Create the output directory if not exist: {output_directory}")
     Path(output_directory).mkdir(parents=True, exist_ok=True)
+    
+    # initialize w&b in the beginning.
+    if is_wandb:
+        logger.warning("Enabling wandb for tensorboard logging...")
+        import wandb
+        run = wandb.init(
+            project="ReaSCAN-Causal", 
+            entity="wuzhengx",
+            name=run_name,
+        )
+        wandb.config.update(args)
     
     logger.info("Loading all data into memory...")
     logger.info(f"Reading dataset from file: {data_path}...")
@@ -276,6 +294,10 @@ def train(
     test_set.shuffle_data()
     logger.info("Done Loading Dev. set.")
     
+    # some important variables.
+    grid_size = training_set.grid_size
+    target_position_size = 2*grid_size - 1
+    
     # create modell based on our dataset.
     model = Model(input_vocabulary_size=training_set.input_vocabulary_size,
                   target_vocabulary_size=training_set.target_vocabulary_size,
@@ -283,6 +305,8 @@ def train(
                   input_padding_idx=training_set.input_vocabulary.pad_idx,
                   target_pad_idx=training_set.target_vocabulary.pad_idx,
                   target_eos_idx=training_set.target_vocabulary.eos_idx,
+                  target_position_size=target_position_size,
+                  intervene_dimension_size=25, # this is dummy.
                   **cfg)
     
     # gpu setups
@@ -359,13 +383,13 @@ def train(
                 situations_input=situation_batch,
                 tag="situation_encode"
             )
-            hidden, encoder_outputs = model(
+            command_hidden, encoder_outputs = model(
                 commands_input=input_batch, 
                 commands_lengths=input_lengths_batch,
                 tag="command_input_encode_no_dict"
             )
             hidden = model(
-                command_hidden=hidden,
+                command_hidden=command_hidden,
                 tag="initialize_hidden"
             )
             projected_keys_visual = model(
@@ -376,17 +400,28 @@ def train(
                 command_encoder_outputs=encoder_outputs["encoder_outputs"],
                 tag="projected_keys_textual"
             )
+            
             outputs = []
             for j in range(train_max_decoding_steps):
                 token = target_batch[:,j]
-                (output, hidden) = model(
-                    lstm_input_tokens_sorted=token,
-                    lstm_hidden=hidden,
+                
+                # we calculate the hidden state conditioned context embedding.
+                lstm_context_embedding = model(
+                    lstm_hidden = hidden,
                     lstm_projected_keys_textual=projected_keys_textual,
                     lstm_commands_lengths=input_lengths_batch,
                     lstm_projected_keys_visual=projected_keys_visual,
+                    tag="_lstm_generate_context_embedding"
+                )
+                
+                # main lstm loop.
+                (output, hidden) = model(
+                    lstm_input_tokens_sorted=token,
+                    lstm_hidden=hidden,
+                    lstm_context_embedding=lstm_context_embedding,
                     tag="_lstm_step_fxn"
                 )
+
                 output = F.log_softmax(output, dim=-1)
                 outputs += [output]
             target_scores = torch.stack(outputs, dim=1)
@@ -431,7 +466,12 @@ def train(
                 logger.info("Iteration %08d, loss %8.4f, accuracy %5.2f, exact match %5.2f, learning_rate %.5f,"
                             " aux. accuracy target pos %5.2f" % (training_iteration, loss, accuracy, exact_match,
                                                                  learning_rate, auxiliary_accuracy_target))
-
+                if is_wandb:
+                    wandb.log({'train/training_iteration': training_iteration})
+                    wandb.log({'train/task_loss': loss})
+                    wandb.log({'train/task_accuracy': accuracy})
+                    wandb.log({'train/task_exact_match': exact_match})
+                    
             # Evaluate on test set.
             if training_iteration % evaluate_every == 0:
                 with torch.no_grad():
@@ -447,6 +487,9 @@ def train(
                     )
                     logger.info("  Evaluation Accuracy: %5.2f Exact Match: %5.2f "
                                 " Target Accuracy: %5.2f" % (accuracy, exact_match, target_accuracy))
+                    if is_wandb:
+                        wandb.log({'eval/accuracy': accuracy})
+                        wandb.log({'eval/exact_match': exact_match})
                     if exact_match > best_exact_match:
                         is_best = True
                         best_accuracy = accuracy
