@@ -150,6 +150,8 @@ def arg_parse():
     # Counterfactual arguments
     parser.add_argument("--cf_mode", type=str, default="random", help="What mode are you in for your counterfactual training.")
     parser.add_argument("--run_name", type=str, default="seq2seq")
+    parser.add_argument("--intervene_method", type=str, default="inplace", choices=['cat', 'inplace'], help="Mainly for debugging purposes, we can intervene by concatenating two vectors or replacing values inplace. They should be identical!")
+
     parser.add_argument("--cf_sample_p", type=float, default=0.25, help="Percentage of examples in a batch to include counterfactual loss")
     parser.add_argument("--checkpoint_save_every", type=int, default=2000)
     parser.add_argument("--evaluate_checkpoint", type=str, default="")
@@ -166,7 +168,8 @@ def arg_parse():
     parser.add_argument("--include_cf_auxiliary_loss", dest="include_cf_auxiliary_loss", default=False, action="store_true",
                         help="If set to true, the model predicts the target location from the joint attention over the "
                              "input instruction and world state.")
-    
+    parser.add_argument("--no_cuda", dest="no_cuda", default=False, action="store_true",
+                        help="Whether to use cuda if avaliable.")
     try:
         get_ipython().run_line_magic('matplotlib', 'inline')
         args = parser.parse_args([])

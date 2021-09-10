@@ -176,7 +176,7 @@ def predict(
                 cf_target_positions_x = F.log_softmax(cf_target_positions_x, dim=-1)
                 cf_target_positions_y = model(
                     position_hidden=hidden[0][:,:,y_s_idx:y_e_idx].squeeze(dim=1),
-                    cf_auxiliary_task_tag="y",
+                    cf_auxiliary_task_tag="x",
                     tag="cf_auxiliary_task"
                 )
                 cf_target_positions_y = F.log_softmax(cf_target_positions_y, dim=-1)
@@ -254,7 +254,7 @@ def evaluate(
            )
 
 
-# In[4]:
+# In[8]:
 
 
 def train(
@@ -307,6 +307,8 @@ def train(
     intervene_time: int,
     intervene_dimension_size: int,
     include_cf_auxiliary_loss: bool,
+    intervene_method: str,
+    no_cuda: bool,
     max_training_examples=None, 
     seed=42,
     **kwargs
@@ -319,9 +321,17 @@ def train(
     assert include_cf_loss or include_task_loss
     cfg = locals().copy()
 
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    os.environ['CUBLAS_WORKSPACE_CONFIG'] = ":16:8"
     random.seed(seed)
-    torch.manual_seed(seed)
     np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed) # if you are using multi-GPU.
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+    
+    n_gpu = torch.cuda.device_count()
     
     from pathlib import Path
     # the output directory name is generated on-the-fly.
@@ -399,9 +409,8 @@ def train(
                   **cfg)
     
     # gpu setups
-    use_cuda = True if torch.cuda.is_available() and not isnotebook() else False
+    use_cuda = True if torch.cuda.is_available() and not isnotebook() and not no_cuda else False
     device = torch.device("cuda" if use_cuda else "cpu")
-    n_gpu = torch.cuda.device_count()
     logger.info(f"device: {device}, and we recognize {n_gpu} gpu(s) in total.")
 
     if use_cuda and n_gpu > 1:
@@ -512,14 +521,14 @@ def train(
             dual_target_max_seq_lens = max(dual_target_lengths_batch)[0]
             
             # let us allow shuffling here, so that we have more diversity.
-            perm_idx = torch.randperm(dual_input_batch.size()[0])
-            dual_input_batch = dual_input_batch.index_select(dim=0, index=perm_idx)
-            dual_target_batch = dual_target_batch.index_select(dim=0, index=perm_idx)
-            dual_situation_batch = dual_situation_batch.index_select(dim=0, index=perm_idx)
-            dual_agent_positions_batch = dual_agent_positions_batch.index_select(dim=0, index=perm_idx)
-            dual_target_positions_batch = dual_target_positions_batch.index_select(dim=0, index=perm_idx)
-            dual_input_lengths_batch = dual_input_lengths_batch.index_select(dim=0, index=perm_idx)
-            dual_target_lengths_batch = dual_target_lengths_batch.index_select(dim=0, index=perm_idx)
+#             perm_idx = torch.randperm(dual_input_batch.size()[0])
+#             dual_input_batch = dual_input_batch.index_select(dim=0, index=perm_idx)
+#             dual_target_batch = dual_target_batch.index_select(dim=0, index=perm_idx)
+#             dual_situation_batch = dual_situation_batch.index_select(dim=0, index=perm_idx)
+#             dual_agent_positions_batch = dual_agent_positions_batch.index_select(dim=0, index=perm_idx)
+#             dual_target_positions_batch = dual_target_positions_batch.index_select(dim=0, index=perm_idx)
+#             dual_input_lengths_batch = dual_input_lengths_batch.index_select(dim=0, index=perm_idx)
+#             dual_target_lengths_batch = dual_target_lengths_batch.index_select(dim=0, index=perm_idx)
             dual_input_batch = dual_input_batch.to(device)
             dual_target_batch = dual_target_batch.to(device)
             dual_situation_batch = dual_situation_batch.to(device)
@@ -872,7 +881,7 @@ def train(
                             cf_target_positions_x = F.log_softmax(cf_target_positions_x, dim=-1)
                             cf_target_positions_y = model(
                                 position_hidden=dual_hidden[0][:,:,y_s_idx:y_e_idx].squeeze(dim=1),
-                                cf_auxiliary_task_tag="y",
+                                cf_auxiliary_task_tag="x",
                                 tag="cf_auxiliary_task"
                             )
                             cf_target_positions_y = F.log_softmax(cf_target_positions_y, dim=-1)
@@ -904,7 +913,20 @@ def train(
                         # intervene!
                         s_idx = intervene_attribute*intervene_dimension_size
                         e_idx = (intervene_attribute+1)*intervene_dimension_size
-                        cf_hidden[0][:,:,s_idx:e_idx] = dual_hidden[0][:,:,s_idx:e_idx] # only swap out this part.
+                        intervene_method = "cat" # or inplace
+                        if intervene_method == "cat":
+                            updated_hidden = torch.cat(
+                                [
+                                   cf_hidden[0][:,:,:s_idx],
+                                   dual_hidden[0][:,:,s_idx:e_idx],
+                                   cf_hidden[0][:,:,e_idx:]
+                                ], dim=-1
+                            )
+                            cf_hidden = (updated_hidden, cf_hidden[1])
+                        elif intervene_method == "inplace":
+                            cf_hidden[0][:,:,s_idx:e_idx] = dual_hidden[0][:,:,s_idx:e_idx] # only swap out this part.
+                        else:
+                            assert False
                         # WARNING: this is a special way to bypassing the state
                         # updates during intervention!
                         cf_token = None
