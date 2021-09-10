@@ -18,7 +18,6 @@ import time
 import random
 import torch.nn.functional as F
 
-from decode_graphical_models import *
 from decode_abstract_models import *
 from seq2seq.ReaSCAN_dataset import *
 from seq2seq.helpers import *
@@ -254,7 +253,7 @@ def evaluate(
            )
 
 
-# In[8]:
+# In[9]:
 
 
 def train(
@@ -521,14 +520,14 @@ def train(
             dual_target_max_seq_lens = max(dual_target_lengths_batch)[0]
             
             # let us allow shuffling here, so that we have more diversity.
-#             perm_idx = torch.randperm(dual_input_batch.size()[0])
-#             dual_input_batch = dual_input_batch.index_select(dim=0, index=perm_idx)
-#             dual_target_batch = dual_target_batch.index_select(dim=0, index=perm_idx)
-#             dual_situation_batch = dual_situation_batch.index_select(dim=0, index=perm_idx)
-#             dual_agent_positions_batch = dual_agent_positions_batch.index_select(dim=0, index=perm_idx)
-#             dual_target_positions_batch = dual_target_positions_batch.index_select(dim=0, index=perm_idx)
-#             dual_input_lengths_batch = dual_input_lengths_batch.index_select(dim=0, index=perm_idx)
-#             dual_target_lengths_batch = dual_target_lengths_batch.index_select(dim=0, index=perm_idx)
+            perm_idx = torch.randperm(dual_input_batch.size()[0])
+            dual_input_batch = dual_input_batch.index_select(dim=0, index=perm_idx)
+            dual_target_batch = dual_target_batch.index_select(dim=0, index=perm_idx)
+            dual_situation_batch = dual_situation_batch.index_select(dim=0, index=perm_idx)
+            dual_agent_positions_batch = dual_agent_positions_batch.index_select(dim=0, index=perm_idx)
+            dual_target_positions_batch = dual_target_positions_batch.index_select(dim=0, index=perm_idx)
+            dual_input_lengths_batch = dual_input_lengths_batch.index_select(dim=0, index=perm_idx)
+            dual_target_lengths_batch = dual_target_lengths_batch.index_select(dim=0, index=perm_idx)
             dual_input_batch = dual_input_batch.to(device)
             dual_target_batch = dual_target_batch.to(device)
             dual_situation_batch = dual_situation_batch.to(device)

@@ -4,20 +4,6 @@
 # In[ ]:
 
 
-"""
-This script will automatically pick all the saved models
-in the folder saved using our training script, and analyze
-them, and output analysis into a file.
-
-It will evaluate models based on their task performance as
-well as counterfactual performance. It will also analyze
-these metrics using all the checkpoints.
-"""
-
-
-# In[3]:
-
-
 import argparse
 import logging
 import os
@@ -33,7 +19,6 @@ import random
 import torch.nn.functional as F
 from tqdm import tqdm, trange
 
-from decode_graphical_models import *
 from decode_abstract_models import *
 from seq2seq.ReaSCAN_dataset import *
 from seq2seq.helpers import *
@@ -193,7 +178,7 @@ def predict(
                 cf_target_positions_x = F.log_softmax(cf_target_positions_x, dim=-1)
                 cf_target_positions_y = model(
                     position_hidden=hidden[0][:,:,y_s_idx:y_e_idx].squeeze(dim=1),
-                    cf_auxiliary_task_tag="y",
+                    cf_auxiliary_task_tag="x",
                     tag="cf_auxiliary_task"
                 )
                 cf_target_positions_y = F.log_softmax(cf_target_positions_y, dim=-1)
@@ -596,7 +581,6 @@ def predict_and_save(
     max_decoding_steps: int,
     device,
     max_testing_examples=None, 
-    counterfactual_evaluate=False,
     **kwargs
 ):
     """
@@ -656,7 +640,7 @@ def predict_and_save(
                               })      
             exact_match = (exact_match_count/example_count)*100.0
             logger.info(" Task Evaluation Exact Match: %5.2f " % (exact_match))
-            if not counterfactual_evaluate:
+            if not cfg["kwargs"]["counterfactual_evaluate"]:
                 logger.info("Wrote predictions for {} examples.".format(example_count))
                 json.dump(output, outfile, indent=4)
                 return output_file_path
@@ -838,8 +822,6 @@ def main(flags):
                 model=model, hi_model=hi_model,
                 output_file_path=output_file_path, 
                 device=device,
-                # we don't need counterfactual evaluation on generalization splits for now.
-                counterfactual_evaluate=True if split == "dev" or split == "test" or split == "train" else False,
                 **flags
             )
             logger.info("Saved predictions to {}".format(output_file))
