@@ -1,6 +1,0 @@
-[submodule "codes/antra"]
-	path = codes/antra
-	url = git@github.com:hansonhl/antra.git
-[submodule "codes/models/seq2seq/antra"]
-	path = codes/models/seq2seq/antra
-	url = git@github.com:hansonhl/antra.git
