@@ -152,7 +152,7 @@ def arg_parse():
     parser.add_argument("--run_name", type=str, default="seq2seq")
     parser.add_argument("--intervene_method", type=str, default="inplace", choices=['cat', 'inplace'], help="Mainly for debugging purposes, we can intervene by concatenating two vectors or replacing values inplace. They should be identical!")
 
-    parser.add_argument("--cf_sample_p", type=float, default=0.25, help="Percentage of examples in a batch to include counterfactual loss")
+    parser.add_argument("--cf_sample_p", type=float, default=1.0, help="Percentage of examples in a batch to include counterfactual loss")
     parser.add_argument("--checkpoint_save_every", type=int, default=2000)
     parser.add_argument("--evaluate_checkpoint", type=str, default="")
     parser.add_argument("--include_task_loss", dest="include_task_loss", default=False,
@@ -162,8 +162,8 @@ def arg_parse():
     parser.add_argument("--cf_loss_weight", type=float, default=1.0, help="Weight of cf loss comparing to the task loss")
     parser.add_argument("--is_wandb", dest="is_wandb", default=False,
                         action="store_true", help="Whether to report metrics to weights and bias.")
-    parser.add_argument("--intervene_attribute", type=int, default=-1)
-    parser.add_argument("--intervene_time", type=int, default=-1)
+    parser.add_argument("--intervene_attribute", type=int, default=-2)
+    parser.add_argument("--intervene_time", type=int, default=1)
     parser.add_argument("--intervene_dimension_size", type=int, default=25)
     parser.add_argument("--include_cf_auxiliary_loss", dest="include_cf_auxiliary_loss", default=False, action="store_true",
                         help="If set to true, the model predicts the target location from the joint attention over the "

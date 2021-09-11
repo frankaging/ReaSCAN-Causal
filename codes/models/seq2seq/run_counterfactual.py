@@ -18,6 +18,7 @@ import time
 import random
 import torch.nn.functional as F
 
+from seq2seq.model import *
 from decode_abstract_models import *
 from seq2seq.ReaSCAN_dataset import *
 from seq2seq.helpers import *
@@ -333,8 +334,8 @@ def train(
     n_gpu = torch.cuda.device_count()
     
     from pathlib import Path
-    # the output directory name is generated on-the-fly.
-    run_name = f"{run_name}_seed_{seed}_time_{intervene_time}_"               f"attr_{intervene_attribute}_size_{intervene_dimension_size}_aux_loss_{include_cf_auxiliary_loss}"
+    dataset_name = data_directory.strip("/").split("/")[-1]
+    run_name = f"counterfactual_{dataset_name}_seed_{seed}_lr_{learning_rate}_attr_{intervene_attribute}_size_{intervene_dimension_size}_cf_loss_{include_cf_loss}_aux_loss_{include_cf_auxiliary_loss}"
     output_directory = os.path.join(output_directory, run_name)
     cfg["output_directory"] = output_directory
     logger.info(f"Create the output directory if not exist: {output_directory}")
@@ -452,16 +453,6 @@ def train(
     logger.info(f"==== WARNING ====")
     logger.info(f"MAX_DECODING_STEPS for Training: {train_max_decoding_steps}")
     logger.info(f"==== WARNING ====")
-    
-    """
-    We have two low model so that our computation is much faster.
-    """
-    low_model = ReaSCANMultiModalLSTMCompGraph(
-         model,
-         train_max_decoding_steps,
-         is_cf=False,
-         cache_results=False
-    )
 
     # create high level model for counterfactual training.
     # WARNING: we are not using antra for high model.
@@ -912,7 +903,6 @@ def train(
                         # intervene!
                         s_idx = intervene_attribute*intervene_dimension_size
                         e_idx = (intervene_attribute+1)*intervene_dimension_size
-                        intervene_method = "cat" # or inplace
                         if intervene_method == "cat":
                             updated_hidden = torch.cat(
                                 [

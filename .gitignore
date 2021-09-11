@@ -1,3 +1,5 @@
+gcnlstm_*/
+counterfactual_*/
 wandb/
 mmlstm_*/
 codes/models/seq2seq/wandb/
