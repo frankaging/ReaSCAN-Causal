@@ -14,17 +14,17 @@ from .gnn import LGCNLayer
 
 logger = logging.getLogger(__name__)
 
-device = th.device("cuda" if th.cuda.is_available() else "cpu")
-
 class GSCAN_model(nn.Module):
-    def __init__(self, pad_idx, target_eos_idx, input_vocab_size, target_vocab_size, output_directory=None,
-                 is_baseline=False, multigpu=False,
-                 ):
+    def __init__(
+        self, pad_idx, target_eos_idx, input_vocab_size, target_vocab_size, output_directory=None,
+        is_baseline=False, multigpu=False,
+        use_cuda=False,
+    ):
         super().__init__()
 
         self.num_vocab = input_vocab_size
 
-        self.encoder = Encoder(pad_idx, input_vocab_size)
+        self.encoder = Encoder(pad_idx, input_vocab_size, use_cuda)
         self.decoder = None
         # self.situation_encoder = None
         self.lgcn = None
@@ -47,7 +47,7 @@ class GSCAN_model(nn.Module):
                                                       num_conv_channels=50,
                                                       dropout_probability=0.1,
                                                       flatten_output=True)  # baseline
-            self.decoder = Decoder(target_vocab_size, pad_idx, visual_key_size=50 * 3, is_baseline=is_baseline)
+            self.decoder = Decoder(target_vocab_size, pad_idx, visual_key_size=50 * 3, is_baseline=is_baseline, use_cuda=use_cuda)
         else:
             self.situation_encoder = ConvolutionalNet(num_channels=cfg.SITU_D_CTX,
                                                       cnn_kernel_size=7,
@@ -55,7 +55,7 @@ class GSCAN_model(nn.Module):
                                                       dropout_probability=0.1,
                                                       flatten_output=True)
             self.lgcn = LGCNLayer()
-            self.decoder = Decoder(target_vocab_size, pad_idx, is_baseline=is_baseline)
+            self.decoder = Decoder(target_vocab_size, pad_idx, is_baseline=is_baseline, use_cuda=use_cuda)
 
         if multigpu:
             raise Exception("Buggy implmentation!")
@@ -76,8 +76,11 @@ class GSCAN_model(nn.Module):
         self.best_iteration = 0
         self.best_exact_match = 0
         self.best_accuracy = 0
-
-        self.device = th.device("cuda" if th.cuda.is_available() else "cpu")
+        
+        if use_cuda:
+            self.device = th.device("cuda" if th.cuda.is_available() else "cpu")
+        else:
+            self.device = th.device("cpu")
 
     def nonzero_extractor(self, x, cnn_out=None):
         lx = []
@@ -93,7 +96,7 @@ class GSCAN_model(nn.Module):
         padding_len = node_out[0].size()[-1] - situation_batch.size()[-1]
         # assume B X H X W X K size for situation_batch
         B, H, W, _ = situation_batch.size()
-        situation_paddng = th.zeros(B, H, W, padding_len).to(situation_batch.device)
+        situation_paddng = th.zeros(B, H, W, padding_len).to(self.device)
         situation_batch = th.cat((situation_batch, situation_paddng), dim=-1)
         for i in range(situation_batch.size(0)):
             sum_x = th.sum(situation_batch[i], dim=-1)
@@ -107,7 +110,7 @@ class GSCAN_model(nn.Module):
         # return input_tensor
         batch_size, max_time = input_tensor.size()
         input_tensor = input_tensor[:, 1:]
-        output_tensor = th.cat([input_tensor, th.zeros([batch_size, 1], device=device, dtype=th.long) + target_pad_idx],
+        output_tensor = th.cat([input_tensor, th.zeros([batch_size, 1], device=input_tensor.device, dtype=th.long) + target_pad_idx],
                                dim=1)
         return output_tensor
 

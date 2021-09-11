@@ -13,8 +13,13 @@ from model.model import GSCAN_model
 from model.utils import *
 
 
-def train(train_data_path: str, val_data_paths: dict, use_cuda: bool, model_name: str, is_baseline: bool,
-          resume_from_file=None):
+def train(
+    train_data_path: str, 
+    val_data_paths: dict, use_cuda: bool, 
+    model_name: str, is_baseline: bool,
+    resume_from_file=None,
+    is_wandb=False,
+):
     logger.info("Loading Training set...")
     logger.info(model_name)
     train_iter, train_input_vocab, train_target_vocab = dataloader(train_data_path,
@@ -53,7 +58,7 @@ def train(train_data_path: str, val_data_paths: dict, use_cuda: bool, model_name
     logger.info("Done Loading Dev. set.")
 
     model = GSCAN_model(pad_idx, eos_idx, train_input_vocab_size, train_target_vocab_size, is_baseline=is_baseline,
-                        output_directory=os.path.join(os.getcwd(), cfg.OUTPUT_DIRECTORY, model_name))
+                        output_directory=os.path.join(os.getcwd(), cfg.OUTPUT_DIRECTORY, model_name), use_cuda=use_cuda)
 
     model = model.cuda() if use_cuda else model
 
@@ -112,10 +117,16 @@ def train(train_data_path: str, val_data_paths: dict, use_cuda: bool, model_name
                 else:
                     auxiliary_accuracy_target = 0.
                 learning_rate = scheduler.get_lr()[0]
-                logger.info("Iteration %08d, loss %8.4f, accuracy %5.2f, exact match %5.2f, learning_rate %.5f,"
-                            " aux. accuracy target pos %5.2f" % (training_iteration, loss, accuracy, exact_match,
+                logger.info("Iteration %08d, batch_num %03d, loss %8.4f, accuracy %5.2f, exact match %5.2f, learning_rate %.5f,"
+                            " aux. accuracy target pos %5.2f" % (training_iteration, num_batch, loss, accuracy, exact_match,
                                                                  learning_rate, auxiliary_accuracy_target))
-
+                if is_wandb:
+                    wandb.log({'train/training_iteration': training_iteration})
+                    wandb.log({'train/task_loss': loss})
+                    wandb.log({'train/task_accuracy': accuracy})
+                    wandb.log({'train/task_exact_match': exact_match})
+                    wandb.log({'train/learning_rate': learning_rate})
+                
             num_batch += 1
 
         if training_iteration % cfg.EVALUATE_EVERY == 0:
@@ -138,6 +149,9 @@ def train(train_data_path: str, val_data_paths: dict, use_cuda: bool, model_name
 
                         logger.info(" %s Accuracy: %5.2f Exact Match: %5.2f "
                                     " Target Accuracy: %5.2f " % (split_name, accuracy, exact_match, target_accuracy))
+                        if is_wandb:
+                            wandb.log({'eval/accuracy': accuracy})
+                            wandb.log({'eval/exact_match': exact_match})
                 except:
                     print("Exception!")
 
@@ -184,8 +198,15 @@ def main(flags, use_cuda):
             logger.info("Running baseline + embedding...")
         else:
             logger.info("Running full model...")
-        train(train_data_path=train_data_path, val_data_paths=val_data_paths, use_cuda=use_cuda, model_name=flags.run,
-              resume_from_file=flags.load, is_baseline=flags.is_baseline)
+        train(
+            train_data_path=train_data_path, 
+            val_data_paths=val_data_paths, 
+            use_cuda=use_cuda, 
+            model_name=flags.run,
+            resume_from_file=flags.load, 
+            is_baseline=flags.is_baseline,
+            is_wandb=flags.is_wandb, 
+        )
 
     elif cfg.MODE == "predict":
         raise NotImplementedError()
@@ -203,6 +224,10 @@ if __name__ == "__main__":
     parser.add_argument('--load', type=str, help='Path to model')
     parser.add_argument('--data_dir', type=str, help='Path to dataset')
     parser.add_argument('--seed', type=int, help='random seeds')
+    parser.add_argument("--is_wandb", dest="is_wandb", default=False,
+                        action="store_true", help="Whether to report metrics to weights and bias.")
+    parser.add_argument("--use_cuda", dest="use_cuda", default=False,
+                        action="store_true", help="Whether to use cuda if available.")
     parser.set_defaults(redirect_output=False, is_baseline=False)
     args = parser.parse_args()
     FORMAT = "%(asctime)-15s %(message)s"
@@ -210,6 +235,20 @@ if __name__ == "__main__":
     random.seed(args.seed)
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
+    
+    # reconstruct the run name to be consistent with other models.
+    dataset_name = args.data_dir.strip("/").split("/")[-1]
+    run_name = f"gcnlstm_{dataset_name}_seed_{args.seed}_lr_{cfg.TRAIN.SOLVER.LR}"
+    args.run = run_name
+    if args.is_wandb:
+        logger.warning("Enabling wandb for tensorboard logging...")
+        import wandb
+        run = wandb.init(
+            project="ReaSCAN-Causal", 
+            entity="wuzhengx",
+            name=args.run,
+        )
+        wandb.config.update(args)
     
     if args.redirect_output:
         output_file = open(os.path.join('exp/', args.run + '.txt'), 'w')
@@ -222,7 +261,7 @@ if __name__ == "__main__":
                             datefmt="%Y-%m-%d %H:%M")
 
     logger = logging.getLogger(__name__)
-    use_cuda = True
+    use_cuda = args.use_cuda
     logger.info("Initialize logger")
 
     if use_cuda:

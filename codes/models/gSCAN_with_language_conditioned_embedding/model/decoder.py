@@ -6,12 +6,15 @@ from .utils import *
 
 class Attention(nn.Module):
 
-    def __init__(self, key_size: int, query_size: int, hidden_size: int):
+    def __init__(self, key_size: int, query_size: int, hidden_size: int, use_cuda: bool):
         super(Attention, self).__init__()
         self.key_layer = nn.Linear(key_size, hidden_size, bias=False)
         self.query_layer = nn.Linear(query_size, hidden_size, bias=False)
         self.energy_layer = nn.Linear(hidden_size, 1, bias=False)
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if use_cuda:
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        else:
+            self.device = torch.device("cpu")
 
     def forward(self, queries: torch.Tensor, projected_keys: torch.Tensor, values: torch.Tensor,
                 memory_lengths: List[int]):
@@ -55,7 +58,7 @@ class BahdanauAttentionDecoderRNN(nn.Module):
 
     def __init__(self, hidden_size: int, output_size: int, num_layers: int, textual_attention: Attention,
                  visual_attention: Attention, dropout_probability=0.1, padding_idx=0,
-                 conditional_attention=False, is_baseline=True):
+                 conditional_attention=False, is_baseline=True, use_cuda=False):
         """
         :param hidden_size: number of hidden units in RNN, and embedding size for output symbols
         :param output_size: number of output symbols
@@ -78,7 +81,10 @@ class BahdanauAttentionDecoderRNN(nn.Module):
         self.visual_attention = visual_attention
         self.output_to_hidden = nn.Linear(hidden_size * 4, hidden_size, bias=False)
         self.hidden_to_output = nn.Linear(hidden_size, output_size, bias=False)
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if use_cuda:
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        else:
+            self.device = torch.device("cpu")
         self.is_baseline = is_baseline
 
     def forward_step(self, input_tokens, last_hidden,
@@ -238,12 +244,12 @@ class BahdanauAttentionDecoderRNN(nn.Module):
 class Decoder(nn.Module):
     def __init__(self, target_vocab_size, target_pad_idx, visual_key_size=cfg.SITU_D_CNN_OUTPUT * 3, \
                  visual_query_size=cfg.DEC_D_H, visual_hidden_size=cfg.DEC_D_H,
-                 is_baseline=True):
+                 is_baseline=True, use_cuda=False):
         super().__init__()
         # if CNN then LGCN: visual_key_size = cfg.SITU_D_CTX
         self.visual_attention = Attention(key_size=visual_key_size, \
-                                          query_size=visual_query_size, hidden_size=visual_hidden_size)
-        self.textual_attention = Attention(key_size=cfg.CMD_D_H, query_size=cfg.DEC_D_H, hidden_size=cfg.DEC_D_H)
+                                          query_size=visual_query_size, hidden_size=visual_hidden_size, use_cuda=use_cuda)
+        self.textual_attention = Attention(key_size=cfg.CMD_D_H, query_size=cfg.DEC_D_H, hidden_size=cfg.DEC_D_H, use_cuda=use_cuda)
 
         self.attentionDecoder = BahdanauAttentionDecoderRNN(hidden_size=cfg.DEC_D_H,
                                                             output_size=target_vocab_size,
@@ -253,7 +259,7 @@ class Decoder(nn.Module):
                                                             textual_attention=self.textual_attention,
                                                             visual_attention=self.visual_attention,
                                                             conditional_attention=cfg.DEC_CONDITIONAL_ATTENTION,
-                                                            is_baseline=is_baseline)
+                                                            is_baseline=is_baseline, use_cuda=use_cuda)
 
         self.tanh = nn.Tanh()
         self.enc_hidden_to_dec_hidden = nn.Linear(cfg.CMD_D_H, cfg.DEC_D_H)

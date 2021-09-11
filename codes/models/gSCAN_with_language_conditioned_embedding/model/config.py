@@ -32,7 +32,7 @@ cfg = __C
 # --------------------------------------------------------------------------- #
 ##OS options
 __C.DATA_DIRECTORY = "parsed_dataset-p1"
-__C.OUTPUT_DIRECTORY = "output"
+__C.OUTPUT_DIRECTORY = "../../../"
 __C.EXP_NAME = 'p1-run-1'
 __C.OUTPUT_FILE_NAME = "predict.json"
 __C.MODE = "train"

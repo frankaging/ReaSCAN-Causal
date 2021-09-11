@@ -3,13 +3,14 @@ from .utils import *
 
 logger = logging.getLogger(__name__)
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
 class Encoder(nn.Module):
-    def __init__(self, pad_idx, input_size):
+    def __init__(self, pad_idx, input_size, use_cuda):
         super().__init__()  # general
-        self.device = device
-
+        if use_cuda:
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        else:
+            self.device = torch.device("cpu")
+            
         # configs
         self.d_x = input_size
         self.d_embed = cfg.CMD_D_EMBED

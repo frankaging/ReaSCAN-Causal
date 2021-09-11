@@ -9,7 +9,7 @@ from model.model import GSCAN_model
 from model.utils import *
 import random
 
-def evaluate(data_iterator, model, max_decoding_steps, pad_idx, sos_idx, eos_idx, max_examples_to_evaluate=None):
+def evaluate(data_iterator, model, max_decoding_steps, pad_idx, sos_idx, eos_idx, device, max_examples_to_evaluate=None):
     target_accuracies = []
     exact_match = 0
     num_examples = 0
@@ -17,7 +17,7 @@ def evaluate(data_iterator, model, max_decoding_steps, pad_idx, sos_idx, eos_idx
     total_terms = 0
     for input_sequence, output_sequence, target_sequence, _, _, aux_acc_target in predict(
             data_iterator=data_iterator, model=model, max_decoding_steps=max_decoding_steps, pad_idx=pad_idx,
-            sos_idx=sos_idx, eos_idx=eos_idx, max_examples_to_evaluate=max_examples_to_evaluate):
+            sos_idx=sos_idx, eos_idx=eos_idx, max_examples_to_evaluate=max_examples_to_evaluate, device=device):
         num_examples += output_sequence.shape[0]
         seq_eq = torch.eq(output_sequence, target_sequence)
         mask = torch.eq(target_sequence, pad_idx) + torch.eq(target_sequence, sos_idx)
@@ -85,7 +85,9 @@ def train(train_data_path: str, val_data_paths: dict, use_cuda: bool, resume_fro
                 max_decoding_steps=30, pad_idx=pad_idx,
                 sos_idx=sos_idx,
                 eos_idx=eos_idx,
-                max_examples_to_evaluate=None)
+                device=device,
+                max_examples_to_evaluate=None,
+            )
             logger.info(" %s Accuracy: %5.2f Exact Match: %5.2f "
                         " Target Accuracy: %5.2f " % (split_name, accuracy, exact_match, target_accuracy))
 

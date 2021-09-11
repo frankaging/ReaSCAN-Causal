@@ -10,9 +10,6 @@ import torch.nn.functional as F
 
 logger = logging.getLogger(__name__)
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-
 def tiny_value_of_dtype(dtype: torch.dtype):
     """
     Returns a moderately tiny value for a given PyTorch data type that is used to avoid numerical
@@ -60,7 +57,7 @@ def sequence_mask(sequence_lengths: torch.LongTensor, max_len=None) -> torch.ten
     if max_len is None:
         max_len = sequence_lengths.data.max()
     batch_size = sequence_lengths.size(0)
-    sequence_range = torch.arange(0, max_len).long().to(device=device)
+    sequence_range = torch.arange(0, max_len).long().to(device=sequence_lengths.device)
 
     # [batch_size, max_len]
     sequence_range_expand = sequence_range.unsqueeze(0).expand(batch_size, max_len)
@@ -192,7 +189,7 @@ def predict_and_save(dataset_iterator, model, output_file_path, max_decoding_ste
 
 
 def predict(data_iterator: Iterator, model: nn.Module, max_decoding_steps: int, pad_idx: int, sos_idx: int,
-            eos_idx: int, max_examples_to_evaluate=None) -> torch.Tensor:
+            eos_idx: int, max_examples_to_evaluate=None, device=None) -> torch.Tensor:
     """
     Loop over all data in data_iterator and predict until <EOS> token is reached.
     :param data_iterator: iterator containing the data to predict
@@ -203,6 +200,7 @@ def predict(data_iterator: Iterator, model: nn.Module, max_decoding_steps: int, 
     :param eos_idx: the end-of-sequence idx of the target vocabulary
     :param: max_examples_to_evaluate: after how many examples to break prediction, if none all are predicted
     """
+    assert device != None
     # Disable dropout and other regularization.
     model.eval()
     start_time = time.time()

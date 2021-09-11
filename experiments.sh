@@ -75,10 +75,19 @@ CUDA_VISIBLE_DEVICES=1 python run_seq2seq.py \
 --learning_rate 0.002 \
 --is_wandb
 
+# train GCN+LSTM model (SoTA model by the time we submit our paper)
+CUDA_VISIBLE_DEVICES=7 python main_model.py \
+--data_dir ./data-files/ReaSCAN-novel-attribute/ \
+--seed 42 \
+--is_wandb
 
+CUDA_VISIBLE_DEVICES=7 python main_model.py \
+--data_dir ./data-files/ReaSCAN-novel-action-length/ \
+--seed 42 \
+--is_wandb
 
-
-
-
-
+CUDA_VISIBLE_DEVICES=7 python main_model.py \
+--data_dir ./data-files/ReaSCAN-novel-direction/ \
+--seed 42 \
+--is_wandb
 
