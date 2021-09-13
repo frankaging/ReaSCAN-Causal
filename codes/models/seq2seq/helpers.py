@@ -170,6 +170,8 @@ def arg_parse():
                              "input instruction and world state.")
     parser.add_argument("--no_cuda", dest="no_cuda", default=False, action="store_true",
                         help="Whether to use cuda if avaliable.")
+    parser.add_argument("--restrict_sampling", type=str, default="none",
+                        help="Whether to restrict samples from counterfactual training have no overlap with test samples.")
     parser.add_argument("--counterfactual_evaluate", dest="counterfactual_evaluate", default=False, action="store_true",
                         help="Whether to evaluate with counterfactual objective.")
     

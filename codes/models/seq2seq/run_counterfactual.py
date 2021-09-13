@@ -309,6 +309,7 @@ def train(
     include_cf_auxiliary_loss: bool,
     intervene_method: str,
     no_cuda: bool,
+    restrict_sampling: str,
     max_training_examples=None, 
     seed=42,
     **kwargs
@@ -335,7 +336,7 @@ def train(
     
     from pathlib import Path
     dataset_name = data_directory.strip("/").split("/")[-1]
-    run_name = f"counterfactual_{dataset_name}_seed_{seed}_lr_{learning_rate}_attr_{intervene_attribute}_size_{intervene_dimension_size}_cf_loss_{include_cf_loss}_aux_loss_{include_cf_auxiliary_loss}"
+    run_name = f"counterfactual_{dataset_name}_seed_{seed}_lr_{learning_rate}_attr_{intervene_attribute}_size_{intervene_dimension_size}_cf_loss_{include_cf_loss}_aux_loss_{include_cf_auxiliary_loss}_restrict_{restrict_sampling}"
     output_directory = os.path.join(output_directory, run_name)
     cfg["output_directory"] = output_directory
     logger.info(f"Create the output directory if not exist: {output_directory}")
@@ -660,6 +661,7 @@ def train(
             cf_high_actions = high_actions
             intervened_target_batch = [torch.ones(high_hidden_states.size(0), 1).long().to(device)] # SOS tokens
             intervened_target_lengths_batch = torch.zeros(high_hidden_states.size(0), 1).long().to(device)
+            saved_intervened_high_hidden_states = []
             # we need to take of the SOS and EOS tokens.
             for j in range(train_max_decoding_steps-1):
                 # intercept like antra!
@@ -676,6 +678,7 @@ def train(
 
                     # only swap out this part.
                     cf_high_hidden_states[:,intervene_attribute] = dual_high_hidden_states[:,intervene_attribute]
+                    saved_intervened_high_hidden_states = cf_high_hidden_states.clone()
                     # cf_high_hidden_states = dual_high_hidden_states
                     # WARNING: we also reinit the action state!
                     # this ensures that our main task training objective is not disordered?
@@ -757,7 +760,25 @@ def train(
                 if is_bad_intervened:
                     continue # we need to skip these.
                 else:
-                    idx_generator += [i]
+                    # we also need to make sure no testing time samples have been encountered before.
+                    if restrict_sampling == "by_direction":
+                        row_diff = saved_intervened_high_hidden_states[i][0]
+                        col_diff = saved_intervened_high_hidden_states[i][1]
+                        if row_diff > 0 and col_diff < 0:
+                            # skip these examples in new direction split.
+                            continue
+                        else:
+                            idx_generator += [i]
+                    elif restrict_sampling == "by_length":
+                        if intervened_target_lengths_batch[i,0] >= 12:
+                            # skip these examples in new action length split.
+                            continue
+                        else:
+                            idx_generator += [i]
+                    elif restrict_sampling == "none":
+                        idx_generator += [i]
+                    else:
+                        assert False
 
             # Let us get rid of antra, using a very simple for loop
             # to do this intervention.
