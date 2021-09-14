@@ -8,6 +8,7 @@ import json
 import torch
 import numpy as np
 from torch.utils.data import DataLoader, TensorDataset
+import random 
 
 import sys
 sys.path.append(os.path.join(os.path.dirname("__file__"), '..', '..', 'Reason-SCAN', 'code', 'dataset'))
@@ -218,6 +219,41 @@ class ReaSCANDataset(object):
                                target_object=situation.target_object, carrying=situation.carrying)
         if mission:
             self._world.set_mission(mission)
+
+    def extract_size_color_shape(self, referred_target_str):
+        target_size_d = ""
+        target_color_d = ""
+        target_shape_d = ""
+        if "small" in referred_target_str:
+            target_size_d = "small"
+        elif "big" in referred_target_str:
+            target_size_d = "big"
+        else:
+            pass
+        if "circle" in referred_target_str:
+            target_shape_d = "circle"
+        elif "cylinder" in referred_target_str:
+            target_shape_d = "cylinder"
+        elif "square" in referred_target_str:
+            target_shape_d = "square"
+        elif "box" in referred_target_str:
+            assert False
+        elif "object" in referred_target_str:
+            assert False
+        else:
+            pass
+        if "red" in referred_target_str:
+            target_color_d = "red"
+        elif "blue" in referred_target_str:
+            target_color_d = "blue"
+        elif "green" in referred_target_str:
+            target_color_d = "green"
+        elif "yellow" in referred_target_str:
+            target_color_d = "yellow"
+        else:
+            pass
+        
+        return target_size_d, target_color_d, target_shape_d
     
     def get_examples_with_image(self, split="train", simple_situation_representation=False) -> dict:
         """
@@ -228,6 +264,9 @@ class ReaSCANDataset(object):
         :return: data examples.
         """
         for example in self.data_json["examples"][split]:
+            target_size_d, target_color_d, target_shape_d = self.extract_size_color_shape(example["referred_target"])
+            target_serialized_str = ",".join([target_size_d, target_color_d, target_shape_d])
+
             command = self.parse_command_repr(example["command"])
             if example.get("meaning"):
                 meaning = example["meaning"]
@@ -245,7 +284,9 @@ class ReaSCANDataset(object):
             yield {"input_command": command, "input_meaning": meaning,
                    "derivation_representation": example.get("derivation"),
                    "situation_image": situation_image, "situation_representation": example["situation"],
-                   "target_command": target_commands}
+                   "target_command": target_commands, "target_str": target_serialized_str, 
+                   "verb_in_command": example["verb_in_command"], 
+                   "adverb_in_command": example["adverb_in_command"]}
     
     def read_vocabularies(self) -> {}:
         """
@@ -288,12 +329,15 @@ class ReaSCANDataset(object):
         max_target_length = np.max(target_lengths)
         return max_target_length
     
-    def get_dual_dataset(self):
+    def get_dual_dataset(self, novel_attribute=False):
         """
         Function for getting dual dataset for
         counterfactual training.
         """
         examples = self._examples
+        # we may want to random shuffle the examples
+        # to make sure have a richer space of composities.
+        random.shuffle(examples)
         
         # get length.
         input_lengths = self._input_lengths
@@ -309,7 +353,10 @@ class ReaSCANDataset(object):
         derivation_representation_batch = []
         agent_positions_batch = []
         target_positions_batch = []
-
+        target_str_batch = [] 
+        adverb_str_batch = []
+        verb_str_batch = []
+        
         for example in examples:
             to_pad_input = max_input_length - example["input_tensor"].size(1)
             to_pad_target = max_target_length - example["target_tensor"].size(1)
@@ -329,6 +376,9 @@ class ReaSCANDataset(object):
             derivation_representation_batch.append(example["derivation_representation"])
             agent_positions_batch.append(example["agent_position"])
             target_positions_batch.append(example["target_position"])
+            target_str_batch.append(example["target_str"])
+            adverb_str_batch.append(example["adverb_in_command"])
+            verb_str_batch.append(example["verb_in_command"])
         
         # Main dataset.
         main_input_batch = torch.cat(input_batch, dim=0)
@@ -358,16 +408,177 @@ class ReaSCANDataset(object):
         dual_target_positions_batch = dual_target_positions_batch.index_select(dim=0, index=perm_idx)
         dual_input_lengths_batch = dual_input_lengths_batch.index_select(dim=0, index=perm_idx)
         dual_target_lengths_batch = dual_target_lengths_batch.index_select(dim=0, index=perm_idx)
-        
-        main_dataset = TensorDataset(
-            # main dataset
-            main_input_batch, main_target_batch, main_situation_batch, main_agent_positions_batch, 
-            main_target_positions_batch, main_input_lengths_batch, main_target_lengths_batch,
-            # dual dataset
-            dual_input_batch, dual_target_batch, dual_situation_batch, dual_agent_positions_batch,
-            dual_target_positions_batch, dual_input_lengths_batch, dual_target_lengths_batch
-        )
+        dual_target_str_batch = [target_str_batch[i] for i in perm_idx.tolist()]
+        dual_situation_representation_batch = [situation_representation_batch[i] for i in perm_idx.tolist()]
+        dual_adverb_str_batch = [adverb_str_batch[i] for i in perm_idx.tolist()]
+        dual_verb_str_batch = [verb_str_batch[i] for i in perm_idx.tolist()]
+        # we need to do a little extra work here just to generate
+        # examples for novel attribute cases.
 
+        # here are the steps:
+        # 1. find avaliable attributes to swap in both example.
+        # 2. swap attribute, and get the updated action sequence, everything else stays the same.
+        # 3. we need to identify the swap index.
+        # 3.1. there can be two ways of swapping, either whole token swapping, or noun embedding
+        # slice swapping. Both should be provided I think.
+        # I think we then need to return two things, noun swapping index, and atribute swapping index
+        # those two could be the same, if we are swapping the noun.
+        batch_size = dual_input_batch.shape[0]
+        intervened_main_swap_index = []
+        intervened_dual_swap_index = []
+        intervened_main_shape_index = []
+        intervened_dual_shape_index = []
+        intervened_target_batch = []
+        for i in range(0, batch_size):
+            if not novel_attribute:
+                # we put dummies
+                main_swap_index, dual_swap_index, main_shape_index, dual_shape_index = -1, -1, -1, -1
+                to_pad_target = max_target_length
+                padded_target = torch.zeros(int(to_pad_target), dtype=torch.long)
+                intervened_main_swap_index += [main_swap_index]
+                intervened_dual_swap_index += [dual_swap_index]
+                intervened_main_shape_index += [main_shape_index]
+                intervened_dual_shape_index += [dual_shape_index]
+                intervened_target_batch += [padded_target]
+                continue
+            main_command_str = self.array_to_sentence(main_input_batch[i].tolist(), "input")
+            dual_command_str = self.array_to_sentence(dual_input_batch[i].tolist(), "input")
+            target_si, target_co, target_sh = target_str_batch[i].split(",")
+            dual_target_si, dual_target_co, dual_target_sh = dual_target_str_batch[i].split(",")
+            potential_swap_attr = []
+            if target_si != "" and dual_target_si != "":
+                potential_swap_attr += ["size"]
+            if target_co != "" and dual_target_co != "":
+                potential_swap_attr += ["color"]
+            if target_sh != "" and dual_target_sh != "":
+                potential_swap_attr += ["shape"]
+            swap_attr = random.choice(potential_swap_attr)
+            if swap_attr == "size":
+                swap_attr_main = target_si
+                swap_attr_dual = dual_target_si
+                new_composites = [dual_target_si, target_co, target_sh]
+            elif swap_attr == "color":
+                swap_attr_main = target_co
+                swap_attr_dual = dual_target_co
+                new_composites = [target_si, dual_target_co, target_sh]
+            elif swap_attr == "shape":
+                swap_attr_main = target_sh
+                swap_attr_dual = dual_target_sh
+                new_composites = [target_si, target_co, dual_target_sh]
+            
+            new_target_id = -1
+            id_size_tuples = []
+            for k, v in situation_representation_batch[i]["placed_objects"].items():
+                if v["object"]["shape"] == dual_target_sh:
+                    if target_co != "":
+                        if v["object"]["color"] == target_co:
+                            id_size_tuples.append((k, v["object"]["size"]))
+                    else:
+                        id_size_tuples.append((k, int(v["object"]["size"])))
+
+            if target_si != "":
+                # we need to ground size relatively?
+                if len(id_size_tuples) >= 2:
+                    id_size_tuples = sorted(id_size_tuples, key=lambda x: x[1])
+                    # only more than 2 we can have relative stuffs.
+                    if target_si == "big":
+                        new_target_id = id_size_tuples[-1][0]
+                    elif target_si == "small":
+                        new_target_id = id_size_tuples[0][0]
+            else:
+                if len(id_size_tuples) == 1:
+                    new_target_id = id_size_tuples[0][0]
+            
+            if new_target_id == -1:
+                # we don't have a new target, we need to use some dummy data!
+                main_swap_index, dual_swap_index, main_shape_index, dual_shape_index = -1, -1, -1, -1
+                to_pad_target = max_target_length
+                padded_target = torch.zeros(int(to_pad_target), dtype=torch.long)
+            else:
+                # we have a new target, let us generate the action sequence as well.
+                new_target_pos = situation_representation_batch[i]["placed_objects"][new_target_id]["position"]
+                self._world.clear_situation()
+                for obj_idx, obj in situation_representation_batch[i]["placed_objects"].items():
+                    self._world.place_object(
+                        Object(size=int(obj["object"]["size"]), color=obj["object"]["color"], shape=obj["object"]["shape"]),
+                        position=Position(row=int(obj["position"]["row"]), column=int(obj["position"]["column"]))
+                    )
+                self._world.place_agent_at(
+                    Position(
+                        row=int(situation_representation_batch[i]["agent_position"]["row"]),
+                        column=int(situation_representation_batch[i]["agent_position"]["column"])
+                ))
+                row = int(new_target_pos["row"])
+                column = int(new_target_pos["column"])
+                new_target_position = Position(
+                    row=row,
+                    column=column
+                )
+                self._world.go_to_position(
+                    position=new_target_position, 
+                    manner=adverb_str_batch[i], 
+                    primitive_command="walk"
+                )
+                
+                if verb_str_batch[i] != "walk":
+                    self._world.move_object_to_wall(action=verb_str_batch[i], manner=adverb_str_batch[i])
+                target_commands, _ = self._world.get_current_observations()
+                target_array = self.sentence_to_array(target_commands, vocabulary="target")
+
+                # now, we need to get the index of words in the sequence that need to be swapped.
+                main_swap_index = main_command_str.index(swap_attr_main)
+                dual_swap_index = dual_command_str.index(swap_attr_dual)
+                main_shape_index = main_command_str.index(target_sh)
+                dual_shape_index = dual_command_str.index(dual_target_sh)
+                
+                if len(target_array) <= max_target_length:
+                    # only these are valid!
+                    target_array = torch.tensor(target_array, dtype=torch.long)
+                    to_pad_target = max_target_length - target_array.size(0)
+                    padded_target = torch.cat([
+                        target_array,
+                        torch.zeros(int(to_pad_target), dtype=torch.long)], dim=-1)
+                else:
+                    # we don't have a valid action sequence, we need to use some dummy data!
+                    main_swap_index, dual_swap_index, main_shape_index, dual_shape_index = -1, -1, -1, -1
+                    to_pad_target = max_target_length
+                    padded_target = torch.zeros(int(to_pad_target), dtype=torch.long)
+            
+            # we now consolidate everything.
+            intervened_main_swap_index += [main_swap_index]
+            intervened_dual_swap_index += [dual_swap_index]
+            intervened_main_shape_index += [main_shape_index]
+            intervened_dual_shape_index += [dual_shape_index]
+            intervened_target_batch += [padded_target]
+        
+        intervened_main_swap_index = torch.tensor(intervened_main_swap_index, dtype=torch.long)
+        intervened_dual_swap_index = torch.tensor(intervened_dual_swap_index, dtype=torch.long)
+        intervened_main_shape_index = torch.tensor(intervened_main_shape_index, dtype=torch.long)
+        intervened_dual_shape_index = torch.tensor(intervened_dual_shape_index, dtype=torch.long)
+        intervened_target_batch = torch.stack(intervened_target_batch, dim=0)
+        
+        if novel_attribute:
+            main_dataset = TensorDataset(
+                # main dataset
+                main_input_batch, main_target_batch, main_situation_batch, main_agent_positions_batch, 
+                main_target_positions_batch, main_input_lengths_batch, main_target_lengths_batch,
+                # dual dataset
+                dual_input_batch, dual_target_batch, dual_situation_batch, dual_agent_positions_batch,
+                dual_target_positions_batch, dual_input_lengths_batch, dual_target_lengths_batch,
+                # intervened dataset for novel attribute
+                intervened_main_swap_index, intervened_dual_swap_index, intervened_main_shape_index, 
+                intervened_dual_shape_index, intervened_target_batch,
+            )
+        else:
+            main_dataset = TensorDataset(
+                # main dataset
+                main_input_batch, main_target_batch, main_situation_batch, main_agent_positions_batch, 
+                main_target_positions_batch, main_input_lengths_batch, main_target_lengths_batch,
+                # dual dataset
+                dual_input_batch, dual_target_batch, dual_situation_batch, dual_agent_positions_batch,
+                dual_target_positions_batch, dual_input_lengths_batch, dual_target_lengths_batch,
+            )
+            
         # with non-tensorized outputs
         return main_dataset, (situation_representation_batch, derivation_representation_batch)
         # the last two items are deprecated. we need to fix them to make them usable.
@@ -527,6 +738,9 @@ class ReaSCANDataset(object):
                 (int(situation_repr["target_object"]["position"]["row"]) * int(situation_repr["grid_size"])) +
                 int(situation_repr["target_object"]["position"]["column"]),
                 dtype=torch.long).unsqueeze(dim=0)
+            empty_example["target_str"] = example["target_str"]
+            empty_example["adverb_in_command"] = example["adverb_in_command"]
+            empty_example["verb_in_command"] = example["verb_in_command"]
             self._input_lengths = np.append(self._input_lengths, [len(input_array)])
             self._target_lengths = np.append(self._target_lengths, [len(target_array)])
             self._examples = np.append(self._examples, [empty_example])

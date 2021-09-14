@@ -185,7 +185,7 @@ CUDA_VISIBLE_DEVICES=7 python run_counterfactual.py \
 # train our action sequence counterfactual model
 # with probe loss + cf loss
 # BUT without seen testing composites during training
-CUDA_VISIBLE_DEVICES=9 python run_counterfactual.py \
+CUDA_VISIBLE_DEVICES=1 python run_counterfactual.py \
 --mode=train \
 --max_decoding_steps=120 \
 --max_testing_examples=2000 \
