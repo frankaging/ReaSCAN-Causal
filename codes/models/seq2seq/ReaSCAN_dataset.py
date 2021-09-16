@@ -346,10 +346,10 @@ class ReaSCANDataset(object):
         target_lengths = self._target_lengths
         # we may want to random shuffle the examples
         # to make sure have a richer space of composities.
-        p = np.random.permutation(len(input_lengths))
-        examples = examples[p]
-        input_lengths = input_lengths[p]
-        target_lengths = target_lengths[p]
+#         p = np.random.permutation(len(input_lengths))
+#         examples = examples[p]
+#         input_lengths = input_lengths[p]
+#         target_lengths = target_lengths[p]
         
         max_input_length = np.max(input_lengths)
         max_target_length = np.max(target_lengths)
