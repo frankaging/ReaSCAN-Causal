@@ -346,10 +346,10 @@ class ReaSCANDataset(object):
         target_lengths = self._target_lengths
         # we may want to random shuffle the examples
         # to make sure have a richer space of composities.
-        # p = np.random.permutation(len(input_lengths))
-        # examples = examples[p]
-        # input_lengths = input_lengths[p]
-        # target_lengths = target_lengths[p]
+        p = np.random.permutation(len(input_lengths))
+        examples = examples[p]
+        input_lengths = input_lengths[p]
+        target_lengths = target_lengths[p]
         
         max_input_length = np.max(input_lengths)
         max_target_length = np.max(target_lengths)
@@ -424,19 +424,6 @@ class ReaSCANDataset(object):
         # we need to do a little extra work here just to generate
         # examples for novel attribute cases.
         
-        if not novel_attribute:
-            main_dataset = TensorDataset(
-                # main dataset
-                main_input_batch, main_target_batch, main_situation_batch, main_agent_positions_batch, 
-                main_target_positions_batch, main_input_lengths_batch, main_target_lengths_batch,
-                # dual dataset
-                dual_input_batch, dual_target_batch, dual_situation_batch, dual_agent_positions_batch,
-                dual_target_positions_batch, dual_input_lengths_batch, dual_target_lengths_batch,
-            )
-            # with non-tensorized outputs
-            return main_dataset, (situation_representation_batch, derivation_representation_batch)
-            # the last two items are deprecated. we need to fix them to make them usable.
-        
         # here are the steps:
         # 1. find avaliable attributes to swap in both example.
         # 2. swap attribute, and get the updated action sequence, everything else stays the same.
@@ -458,12 +445,12 @@ class ReaSCANDataset(object):
                 # we put dummies
                 main_swap_index, dual_swap_index, main_shape_index, dual_shape_index = -1, -1, -1, -1
                 to_pad_target = max_target_length
-                padded_target = torch.zeros(int(to_pad_target), dtype=torch.long)
+                intervened_padded_target = torch.zeros(int(to_pad_target), dtype=torch.long)
                 intervened_main_swap_index += [main_swap_index]
                 intervened_dual_swap_index += [dual_swap_index]
                 intervened_main_shape_index += [main_shape_index]
                 intervened_dual_shape_index += [dual_shape_index]
-                intervened_target_batch += [padded_target]
+                intervened_target_batch += [intervened_padded_target]
                 intervened_target_lengths_batch += [0]
                 continue
             main_command_str = self.array_to_sentence(main_input_batch[i].tolist(), "input")
@@ -522,7 +509,7 @@ class ReaSCANDataset(object):
                 # we don't have a new target, we need to use some dummy data!
                 main_swap_index, dual_swap_index, main_shape_index, dual_shape_index = -1, -1, -1, -1
                 to_pad_target = max_target_length
-                padded_target = torch.zeros(int(to_pad_target), dtype=torch.long)
+                intervened_padded_target = torch.zeros(int(to_pad_target), dtype=torch.long)
                 intervened_target_lengths_batch += [0]
             else:
                 # we have a new target, let us generate the action sequence as well.
@@ -566,14 +553,14 @@ class ReaSCANDataset(object):
                     target_array = torch.tensor(target_array, dtype=torch.long)
                     to_pad_target = max_target_length - target_array.size(0)
                     intervened_target_lengths_batch += [target_array.size(0)]
-                    padded_target = torch.cat([
+                    intervened_padded_target = torch.cat([
                         target_array,
                         torch.zeros(int(to_pad_target), dtype=torch.long)], dim=-1)
                 else:
                     # we don't have a valid action sequence, we need to use some dummy data!
                     main_swap_index, dual_swap_index, main_shape_index, dual_shape_index = -1, -1, -1, -1
                     to_pad_target = max_target_length
-                    padded_target = torch.zeros(int(to_pad_target), dtype=torch.long)
+                    intervened_padded_target = torch.zeros(int(to_pad_target), dtype=torch.long)
                     intervened_target_lengths_batch += [0]
             
             # we now consolidate everything.
@@ -581,7 +568,7 @@ class ReaSCANDataset(object):
             intervened_dual_swap_index += [dual_swap_index]
             intervened_main_shape_index += [main_shape_index]
             intervened_dual_shape_index += [dual_shape_index]
-            intervened_target_batch += [padded_target]
+            intervened_target_batch += [intervened_padded_target]
         
         intervened_main_swap_index = torch.tensor(intervened_main_swap_index, dtype=torch.long)
         intervened_dual_swap_index = torch.tensor(intervened_dual_swap_index, dtype=torch.long)
