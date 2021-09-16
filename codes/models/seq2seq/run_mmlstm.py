@@ -466,7 +466,7 @@ def train(
             batch_size = agent_positions_batch.size(0)
             intervened_target_batch = []
             intervened_target_lengths_batch = []
-            cf_sample_per_batch = int(batch_size*cf_sample_per_batch_in_percentage)
+
             high_hidden_states = hi_model(
                 agent_positions_batch=agent_positions_batch.unsqueeze(dim=-1), 
                 target_positions_batch=target_positions_batch.unsqueeze(dim=-1), 
