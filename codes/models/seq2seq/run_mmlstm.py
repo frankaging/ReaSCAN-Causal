@@ -365,6 +365,12 @@ def train(
     logger.info(f"MAX_DECODING_STEPS for Training: {train_max_decoding_steps}")
     logger.info(f"==== WARNING ====")
 
+    hi_model = HighLevelModel(
+        # None
+    )
+    hi_model.to(device)
+    logger.info("Finish loading both low and high models..")
+    
     logger.info("Training starts..")
     training_iteration = start_iteration
     while training_iteration < max_training_iterations:
