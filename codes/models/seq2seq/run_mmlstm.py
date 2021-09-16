@@ -375,6 +375,8 @@ def train(
     logger.info("Finish loading both low and high models..")
     
     logger.info("Training starts..")
+    cf_sample_per_batch_in_percentage = cf_sample_p
+    logger.info(f"Setting cf_sample_per_batch_in_percentage = {cf_sample_per_batch_in_percentage}")
     training_iteration = start_iteration
     while training_iteration < max_training_iterations:
 
