@@ -418,10 +418,10 @@ def train(
             dual_input_lengths_batch = dual_input_lengths_batch.to(device)
             dual_target_lengths_batch = dual_target_lengths_batch.to(device)
             
-            loss = None
-            task_loss = None
-            cf_loss = None
-            cf_position_loss = None
+            loss = 0.0
+            task_loss = 0.0
+            cf_loss = 0.0
+            cf_position_loss = 0.0
             batch_size = agent_positions_batch.size(0)
             cf_sample_per_batch = int(batch_size*cf_sample_per_batch_in_percentage)
 
