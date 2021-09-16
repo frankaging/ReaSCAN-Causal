@@ -948,7 +948,7 @@ def train(
             if include_cf_auxiliary_loss:
                 if loss != None:
                     if cf_position_loss:
-                        loss += cf_position_loss
+                        loss += cf_loss_weight*cf_position_loss
                 else:
                     if cf_position_loss:
                         loss = cf_position_loss
