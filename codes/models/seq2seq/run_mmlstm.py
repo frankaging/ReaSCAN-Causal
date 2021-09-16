@@ -376,8 +376,9 @@ def train(
             is_best = False
             model.train()
             
-            input_max_seq_lens = max(input_lengths_batch)[0]
-            target_max_seq_lens = max(target_lengths_batch)[0]
+            is_best = False
+            model.train()
+            
             input_batch = input_batch.to(device)
             target_batch = target_batch.to(device)
             situation_batch = situation_batch.to(device)
@@ -386,58 +387,76 @@ def train(
             input_lengths_batch = input_lengths_batch.to(device)
             target_lengths_batch = target_lengths_batch.to(device)
             
+            dual_input_max_seq_lens = max(dual_input_lengths_batch)[0]
+            dual_target_max_seq_lens = max(dual_target_lengths_batch)[0]
+            
+            # let us allow shuffling here, so that we have more diversity.
+            perm_idx = torch.randperm(dual_input_batch.size()[0])
+            dual_input_batch = dual_input_batch.index_select(dim=0, index=perm_idx)
+            dual_target_batch = dual_target_batch.index_select(dim=0, index=perm_idx)
+            dual_situation_batch = dual_situation_batch.index_select(dim=0, index=perm_idx)
+            dual_agent_positions_batch = dual_agent_positions_batch.index_select(dim=0, index=perm_idx)
+            dual_target_positions_batch = dual_target_positions_batch.index_select(dim=0, index=perm_idx)
+            dual_input_lengths_batch = dual_input_lengths_batch.index_select(dim=0, index=perm_idx)
+            dual_target_lengths_batch = dual_target_lengths_batch.index_select(dim=0, index=perm_idx)
+            dual_input_batch = dual_input_batch.to(device)
+            dual_target_batch = dual_target_batch.to(device)
+            dual_situation_batch = dual_situation_batch.to(device)
+            dual_agent_positions_batch = dual_agent_positions_batch.to(device)
+            dual_target_positions_batch = dual_target_positions_batch.to(device)
+            dual_input_lengths_batch = dual_input_lengths_batch.to(device)
+            dual_target_lengths_batch = dual_target_lengths_batch.to(device)
+            
+            loss = None
+            task_loss = None
+            cf_loss = None
+            cf_position_loss = None
+            
             # we use the main hidden to track.
-            encoded_image = model(
+            task_encoded_image = model(
                 situations_input=situation_batch,
                 tag="situation_encode"
             )
-            hidden, encoder_outputs = model(
+            task_hidden, task_encoder_outputs = model(
                 commands_input=input_batch, 
                 commands_lengths=input_lengths_batch,
                 tag="command_input_encode_no_dict"
             )
-            hidden = model(
-                command_hidden=hidden,
+            task_hidden = model(
+                command_hidden=task_hidden,
                 tag="initialize_hidden"
             )
-            projected_keys_visual = model(
-                encoded_situations=encoded_image,
+            task_projected_keys_visual = model(
+                encoded_situations=task_encoded_image,
                 tag="projected_keys_visual"
             )
-            projected_keys_textual = model(
-                command_encoder_outputs=encoder_outputs["encoder_outputs"],
+            task_projected_keys_textual = model(
+                command_encoder_outputs=task_encoder_outputs["encoder_outputs"],
                 tag="projected_keys_textual"
             )
-            outputs = []
+            task_outputs = []
             for j in range(train_max_decoding_steps):
-                token = target_batch[:,j]
-                (output, hidden) = model(
-                    lstm_input_tokens_sorted=token,
-                    lstm_hidden=hidden,
-                    lstm_projected_keys_textual=projected_keys_textual,
+                task_token = target_batch[:,j]
+                (task_output, task_hidden) = model(
+                    lstm_input_tokens_sorted=task_token,
+                    lstm_hidden=task_hidden,
+                    lstm_projected_keys_textual=task_projected_keys_textual,
                     lstm_commands_lengths=input_lengths_batch,
-                    lstm_projected_keys_visual=projected_keys_visual,
+                    lstm_projected_keys_visual=task_projected_keys_visual,
                     tag="_lstm_step_fxn"
                 )
-                output = F.log_softmax(output, dim=-1)
-                outputs += [output]
-            target_scores = torch.stack(outputs, dim=1)
-            loss = model(
+                task_output = F.log_softmax(task_output, dim=-1)
+                task_outputs += [task_output]
+            target_scores = torch.stack(task_outputs, dim=1)
+            task_loss = model(
                 loss_target_scores=target_scores, 
                 loss_target_batch=target_batch,
                 tag="loss"
             )
-                
             if use_cuda and n_gpu > 1:
-                loss = loss.mean() # mean() to average on multi-gpu.
-            # we need to average over actual length to get rid of padding losses.
-            # loss /= target_lengths_batch.sum()
-            if auxiliary_task:
-                target_loss = 0
-                pass
-            else:
-                target_loss = 0
-            loss += weight_target_loss * target_loss
+                task_loss = task_loss.mean() # mean() to average on multi-gpu.
+            
+            loss = task_loss
             # Backward pass and update model parameters.
             loss.backward()
             optimizer.step()
