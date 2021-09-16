@@ -16,7 +16,7 @@ import sys
 sys.path.append(os.path.join(os.path.dirname("__file__"), '..'))
 import time
 
-from decode_graphical_models import *
+from seq2seq.model import *
 from seq2seq.ReaSCAN_dataset import *
 from seq2seq.helpers import *
 from torch.optim.lr_scheduler import LambdaLR
@@ -139,10 +139,8 @@ def predict(
 
         if output_sequence[-1] == eos_idx:
             output_sequence.pop()
-        if model(tag="auxiliary_task"):
-            pass
-        else:
-            auxiliary_accuracy_agent, auxiliary_accuracy_target = 0, 0
+
+        auxiliary_accuracy_agent, auxiliary_accuracy_target = 0, 0
         yield (input_sequence, output_sequence, target_sequence, auxiliary_accuracy_target)
 
     elapsed_time = time.time() - start_time
@@ -217,6 +215,7 @@ def train(
     weight_target_loss: float, 
     attention_type: str, 
     k: int, 
+    is_wandb: bool,
     max_training_examples=None, 
     seed=42, **kwargs
 ):
@@ -228,11 +227,23 @@ def train(
     
     from pathlib import Path
     # the output directory name is generated on-the-fly.
-    run_name = f"seq2seq_seed_{seed}_max_itr_{max_training_iterations}"
+    dataset_name = data_directory.strip("/").split("/")[-1]
+    run_name = f"mmlstm_{dataset_name}_seed_{seed}_lr_{learning_rate}"
     output_directory = os.path.join(output_directory, run_name)
     cfg["output_directory"] = output_directory
     logger.info(f"Create the output directory if not exist: {output_directory}")
     Path(output_directory).mkdir(parents=True, exist_ok=True)
+    
+    # initialize w&b in the beginning.
+    if is_wandb:
+        logger.warning("Enabling wandb for tensorboard logging...")
+        import wandb
+        run = wandb.init(
+            project="ReaSCAN-Causal", 
+            entity="wuzhengx",
+            name=run_name,
+        )
+        wandb.config.update(args)
     
     logger.info("Loading all data into memory...")
     logger.info(f"Reading dataset from file: {data_path}...")
@@ -276,6 +287,10 @@ def train(
     test_set.shuffle_data()
     logger.info("Done Loading Dev. set.")
     
+    # some important variables.
+    grid_size = training_set.grid_size
+    target_position_size = 2*grid_size - 1
+    
     # create modell based on our dataset.
     model = Model(input_vocabulary_size=training_set.input_vocabulary_size,
                   target_vocabulary_size=training_set.target_vocabulary_size,
@@ -283,6 +298,8 @@ def train(
                   input_padding_idx=training_set.input_vocabulary.pad_idx,
                   target_pad_idx=training_set.target_vocabulary.pad_idx,
                   target_eos_idx=training_set.target_vocabulary.eos_idx,
+                  target_position_size=target_position_size,
+                  intervene_dimension_size=25, # this is dummy.
                   **cfg)
     
     # gpu setups
@@ -328,12 +345,7 @@ def train(
     logger.info(f"==== WARNING ====")
     logger.info(f"MAX_DECODING_STEPS for Training: {train_max_decoding_steps}")
     logger.info(f"==== WARNING ====")
-    g_model = ReaSCANMultiModalLSTMCompGraph(
-         model,
-         train_max_decoding_steps,
-         cache_results=False
-    )
-    
+
     logger.info("Training starts..")
     training_iteration = start_iteration
     while training_iteration < max_training_iterations:
@@ -431,7 +443,12 @@ def train(
                 logger.info("Iteration %08d, loss %8.4f, accuracy %5.2f, exact match %5.2f, learning_rate %.5f,"
                             " aux. accuracy target pos %5.2f" % (training_iteration, loss, accuracy, exact_match,
                                                                  learning_rate, auxiliary_accuracy_target))
-
+                if is_wandb:
+                    wandb.log({'train/training_iteration': training_iteration})
+                    wandb.log({'train/task_loss': loss})
+                    wandb.log({'train/task_accuracy': accuracy})
+                    wandb.log({'train/task_exact_match': exact_match})
+                    
             # Evaluate on test set.
             if training_iteration % evaluate_every == 0:
                 with torch.no_grad():
@@ -447,6 +464,9 @@ def train(
                     )
                     logger.info("  Evaluation Accuracy: %5.2f Exact Match: %5.2f "
                                 " Target Accuracy: %5.2f" % (accuracy, exact_match, target_accuracy))
+                    if is_wandb:
+                        wandb.log({'eval/accuracy': accuracy})
+                        wandb.log({'eval/exact_match': exact_match})
                     if exact_match > best_exact_match:
                         is_best = True
                         best_accuracy = accuracy
@@ -492,7 +512,7 @@ def main(flags):
     assert os.path.exists(data_path), "Trying to read a gSCAN dataset from a non-existing file {}.".format(
         data_path)
     if flags["mode"] == "train":
-        train(data_path=data_path, **flags)  
+        train(data_path=data_path, **flags)
 
 
 # In[ ]:
