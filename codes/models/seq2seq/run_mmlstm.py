@@ -396,25 +396,25 @@ def train(
             input_lengths_batch = input_lengths_batch.to(device)
             target_lengths_batch = target_lengths_batch.to(device)
             
-#             dual_input_max_seq_lens = max(dual_input_lengths_batch)[0]
-#             dual_target_max_seq_lens = max(dual_target_lengths_batch)[0]
+            dual_input_max_seq_lens = max(dual_input_lengths_batch)[0]
+            dual_target_max_seq_lens = max(dual_target_lengths_batch)[0]
             
-#             # let us allow shuffling here, so that we have more diversity.
-#             perm_idx = torch.randperm(dual_input_batch.size()[0])
-#             dual_input_batch = dual_input_batch.index_select(dim=0, index=perm_idx)
-#             dual_target_batch = dual_target_batch.index_select(dim=0, index=perm_idx)
-#             dual_situation_batch = dual_situation_batch.index_select(dim=0, index=perm_idx)
-#             dual_agent_positions_batch = dual_agent_positions_batch.index_select(dim=0, index=perm_idx)
-#             dual_target_positions_batch = dual_target_positions_batch.index_select(dim=0, index=perm_idx)
-#             dual_input_lengths_batch = dual_input_lengths_batch.index_select(dim=0, index=perm_idx)
-#             dual_target_lengths_batch = dual_target_lengths_batch.index_select(dim=0, index=perm_idx)
-#             dual_input_batch = dual_input_batch.to(device)
-#             dual_target_batch = dual_target_batch.to(device)
-#             dual_situation_batch = dual_situation_batch.to(device)
-#             dual_agent_positions_batch = dual_agent_positions_batch.to(device)
-#             dual_target_positions_batch = dual_target_positions_batch.to(device)
-#             dual_input_lengths_batch = dual_input_lengths_batch.to(device)
-#             dual_target_lengths_batch = dual_target_lengths_batch.to(device)
+            # let us allow shuffling here, so that we have more diversity.
+            perm_idx = torch.randperm(dual_input_batch.size()[0])
+            dual_input_batch = dual_input_batch.index_select(dim=0, index=perm_idx)
+            dual_target_batch = dual_target_batch.index_select(dim=0, index=perm_idx)
+            dual_situation_batch = dual_situation_batch.index_select(dim=0, index=perm_idx)
+            dual_agent_positions_batch = dual_agent_positions_batch.index_select(dim=0, index=perm_idx)
+            dual_target_positions_batch = dual_target_positions_batch.index_select(dim=0, index=perm_idx)
+            dual_input_lengths_batch = dual_input_lengths_batch.index_select(dim=0, index=perm_idx)
+            dual_target_lengths_batch = dual_target_lengths_batch.index_select(dim=0, index=perm_idx)
+            dual_input_batch = dual_input_batch.to(device)
+            dual_target_batch = dual_target_batch.to(device)
+            dual_situation_batch = dual_situation_batch.to(device)
+            dual_agent_positions_batch = dual_agent_positions_batch.to(device)
+            dual_target_positions_batch = dual_target_positions_batch.to(device)
+            dual_input_lengths_batch = dual_input_lengths_batch.to(device)
+            dual_target_lengths_batch = dual_target_lengths_batch.to(device)
             
             loss = None
             task_loss = None
