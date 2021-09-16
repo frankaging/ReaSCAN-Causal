@@ -70,9 +70,7 @@ def predict(
             if i > max_examples_to_evaluate:
                 break
         
-        # derivation_spec
-        # situation_spec
-        input_sequence, target_sequence, situation,             agent_positions, target_positions,             input_lengths, target_lengths = batch
+        input_sequence, target_sequence, situation,             agent_positions, target_positions,             input_lengths, target_lengths,             dual_input_sequence, dual_target_sequence, dual_situation,             dual_agent_positions, dual_target_positions,             dual_input_lengths, dual_target_lengths = batch
         
         input_max_seq_lens = max(input_lengths)[0]
         target_max_seq_lens = max(target_lengths)[0]
@@ -331,10 +329,10 @@ def train(
         logger.info("Loaded checkpoint '{}' (iter {})".format(resume_from_file, start_iteration))
     
     # Loading dataset and preprocessing a bit.
-    train_data, _ = training_set.get_dataset()
+    train_data, _ = training_set.get_dual_dataset()
     train_sampler = RandomSampler(train_data)
     train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.training_batch_size)
-    test_data, _ = test_set.get_dataset()
+    test_data, _ = test_set.get_dual_dataset()
     test_dataloader = DataLoader(test_data, batch_size=args.test_batch_size, shuffle=False)
     
     if use_cuda and n_gpu > 1:
@@ -352,7 +350,8 @@ def train(
 
         # Shuffle the dataset and loop over it.
         for step, batch in enumerate(train_dataloader):
-            input_batch, target_batch, situation_batch,                 agent_positions_batch, target_positions_batch,                 input_lengths_batch, target_lengths_batch = batch
+            # main batch
+            input_batch, target_batch, situation_batch,                 agent_positions_batch, target_positions_batch,                 input_lengths_batch, target_lengths_batch,                 dual_input_batch, dual_target_batch, dual_situation_batch,                 dual_agent_positions_batch, dual_target_positions_batch,                 dual_input_lengths_batch, dual_target_lengths_batch = batch
             is_best = False
             model.train()
             
