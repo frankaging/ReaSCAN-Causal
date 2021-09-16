@@ -421,49 +421,49 @@ def train(
             cf_loss = None
             cf_position_loss = None
             
-#             # we use the main hidden to track.
-#             task_encoded_image = model(
-#                 situations_input=situation_batch,
-#                 tag="situation_encode"
-#             )
-#             task_hidden, task_encoder_outputs = model(
-#                 commands_input=input_batch, 
-#                 commands_lengths=input_lengths_batch,
-#                 tag="command_input_encode_no_dict"
-#             )
-#             task_hidden = model(
-#                 command_hidden=task_hidden,
-#                 tag="initialize_hidden"
-#             )
-#             task_projected_keys_visual = model(
-#                 encoded_situations=task_encoded_image,
-#                 tag="projected_keys_visual"
-#             )
-#             task_projected_keys_textual = model(
-#                 command_encoder_outputs=task_encoder_outputs["encoder_outputs"],
-#                 tag="projected_keys_textual"
-#             )
-#             task_outputs = []
-#             for j in range(train_max_decoding_steps):
-#                 task_token = target_batch[:,j]
-#                 (task_output, task_hidden) = model(
-#                     lstm_input_tokens_sorted=task_token,
-#                     lstm_hidden=task_hidden,
-#                     lstm_projected_keys_textual=task_projected_keys_textual,
-#                     lstm_commands_lengths=input_lengths_batch,
-#                     lstm_projected_keys_visual=task_projected_keys_visual,
-#                     tag="_lstm_step_fxn"
-#                 )
-#                 task_output = F.log_softmax(task_output, dim=-1)
-#                 task_outputs += [task_output]
-#             target_scores = torch.stack(task_outputs, dim=1)
-#             task_loss = model(
-#                 loss_target_scores=target_scores, 
-#                 loss_target_batch=target_batch,
-#                 tag="loss"
-#             )
-#             if use_cuda and n_gpu > 1:
-#                 task_loss = task_loss.mean() # mean() to average on multi-gpu.
+            # we use the main hidden to track.
+            task_encoded_image = model(
+                situations_input=situation_batch,
+                tag="situation_encode"
+            )
+            task_hidden, task_encoder_outputs = model(
+                commands_input=input_batch, 
+                commands_lengths=input_lengths_batch,
+                tag="command_input_encode_no_dict"
+            )
+            task_hidden = model(
+                command_hidden=task_hidden,
+                tag="initialize_hidden"
+            )
+            task_projected_keys_visual = model(
+                encoded_situations=task_encoded_image,
+                tag="projected_keys_visual"
+            )
+            task_projected_keys_textual = model(
+                command_encoder_outputs=task_encoder_outputs["encoder_outputs"],
+                tag="projected_keys_textual"
+            )
+            task_outputs = []
+            for j in range(train_max_decoding_steps):
+                task_token = target_batch[:,j]
+                (task_output, task_hidden) = model(
+                    lstm_input_tokens_sorted=task_token,
+                    lstm_hidden=task_hidden,
+                    lstm_projected_keys_textual=task_projected_keys_textual,
+                    lstm_commands_lengths=input_lengths_batch,
+                    lstm_projected_keys_visual=task_projected_keys_visual,
+                    tag="_lstm_step_fxn"
+                )
+                task_output = F.log_softmax(task_output, dim=-1)
+                task_outputs += [task_output]
+            target_scores = torch.stack(task_outputs, dim=1)
+            task_loss = model(
+                loss_target_scores=target_scores, 
+                loss_target_batch=target_batch,
+                tag="loss"
+            )
+            if use_cuda and n_gpu > 1:
+                task_loss = task_loss.mean() # mean() to average on multi-gpu.
             
 #             input_max_seq_lens = max(input_lengths_batch)[0]
 #             target_max_seq_lens = max(target_lengths_batch)[0]
