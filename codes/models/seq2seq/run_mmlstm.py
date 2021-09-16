@@ -508,7 +508,7 @@ def train(
 # In[ ]:
 
 
-def main(flags):
+def main(flags, args):
     
     logger = logging.getLogger(__name__)
     logger.setLevel(logging.INFO)
@@ -532,7 +532,7 @@ def main(flags):
     assert os.path.exists(data_path), "Trying to read a gSCAN dataset from a non-existing file {}.".format(
         data_path)
     if flags["mode"] == "train":
-        train(data_path=data_path, **flags)  
+        train(data_path=data_path, args=args, **flags)  
 
 
 # In[ ]:
@@ -554,5 +554,5 @@ if __name__ == "__main__":
         is_jupyter = False
     
     input_flags = vars(args)
-    main(flags=input_flags)
+    main(input_flags, args)
 
