@@ -456,6 +456,91 @@ def train(
             if use_cuda and n_gpu > 1:
                 task_loss = task_loss.mean() # mean() to average on multi-gpu.
             
+            input_max_seq_lens = max(input_lengths_batch)[0]
+            target_max_seq_lens = max(target_lengths_batch)[0]
+            dual_target_max_seq_lens = max(dual_target_lengths_batch)[0]
+            intervene_attribute = random.choice([0,1])
+            intervene_time = 1
+            intervene_with_time = intervene_time
+            
+            batch_size = agent_positions_batch.size(0)
+            intervened_target_batch = []
+            intervened_target_lengths_batch = []
+            cf_sample_per_batch = int(batch_size*cf_sample_per_batch_in_percentage)
+            high_hidden_states = hi_model(
+                agent_positions_batch=agent_positions_batch.unsqueeze(dim=-1), 
+                target_positions_batch=target_positions_batch.unsqueeze(dim=-1), 
+                tag="situation_encode"
+            )
+            high_actions = torch.zeros(
+                high_hidden_states.size(0), 1
+            ).long().to(device)
+            dual_high_hidden_states = hi_model(
+                agent_positions_batch=dual_agent_positions_batch.unsqueeze(dim=-1), 
+                target_positions_batch=dual_target_positions_batch.unsqueeze(dim=-1), 
+                tag="situation_encode"
+            )
+            dual_high_actions = torch.zeros(
+                dual_high_hidden_states.size(0), 1
+            ).long().to(device)
+            # get the intercepted dual hidden states.
+            for j in range(intervene_with_time):
+                dual_high_hidden_states, dual_high_actions = hi_model(
+                    hmm_states=dual_high_hidden_states, 
+                    hmm_actions=dual_high_actions, 
+                    tag="_hmm_step_fxn"
+                )
+            # main intervene for loop.
+            cf_high_hidden_states = high_hidden_states
+            cf_high_actions = high_actions
+            intervened_target_batch = [torch.ones(high_hidden_states.size(0), 1).long().to(device)] # SOS tokens
+            intervened_target_lengths_batch = torch.zeros(high_hidden_states.size(0), 1).long().to(device)
+            # we need to take of the SOS and EOS tokens.
+            for j in range(train_max_decoding_steps-1):
+                # intercept like antra!
+                if j == intervene_time-1:
+                    # we need idle once by getting the states but not continue the HMM!
+                    cf_high_hidden_states, _ = hi_model(
+                        hmm_states=cf_high_hidden_states, 
+                        hmm_actions=cf_high_actions, 
+                        tag="_hmm_step_fxn"
+                    )
+                    # we also include a probe loss.
+                    if include_cf_auxiliary_loss:
+                        true_target_positions = dual_high_hidden_states+5
+
+                    # only swap out this part.
+                    cf_high_hidden_states[:,intervene_attribute] = dual_high_hidden_states[:,intervene_attribute]
+                    cf_high_actions = torch.zeros(
+                        dual_high_hidden_states.size(0), 1
+                    ).long().to(device)
+                    # comment out two lines below if it is not for testing.
+                    # cf_high_hidden_states = dual_high_hidden_states
+                    # cf_high_actions = dual_high_actions
+                cf_high_hidden_states, cf_high_actions = hi_model(
+                    hmm_states=cf_high_hidden_states, 
+                    hmm_actions=cf_high_actions, 
+                    tag="_hmm_step_fxn"
+                )
+                # record the output for loss calculation.
+                intervened_target_batch += [cf_high_actions]
+                intervened_target_lengths_batch += (cf_high_actions!=0).long()
+            intervened_target_lengths_batch += 2
+            # we do not to increase the EOS for non-ending sequences
+            for i in range(high_hidden_states.size(0)):
+                if intervened_target_lengths_batch[i,0] == train_max_decoding_steps+1:
+                    intervened_target_lengths_batch[i,0] = train_max_decoding_steps
+            intervened_target_batch = torch.cat(intervened_target_batch, dim=-1)
+            for i in range(high_hidden_states.size(0)):
+                if intervened_target_batch[i,intervened_target_lengths_batch[i,0]-1] == 0:
+                    intervened_target_batch[i,intervened_target_lengths_batch[i,0]-1] = 2
+            # intervened data.
+            intervened_target_batch = intervened_target_batch.clone()
+            intervened_target_lengths_batch = intervened_target_lengths_batch.clone()
+            # correct the length.
+            intervened_target_lengths_batch[intervened_target_lengths_batch>train_max_decoding_steps] = train_max_decoding_steps
+            
+            
             loss = task_loss
             # Backward pass and update model parameters.
             loss.backward()
