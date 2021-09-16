@@ -40,20 +40,12 @@ class EncoderRNN(nn.Module):
         self.lstm = nn.LSTM(input_size=rnn_input_size, hidden_size=hidden_size, num_layers=num_layers,
                             dropout=dropout_probability, bidirectional=bidirectional, batch_first=True)
 
-    def forward(self, input_batch: torch.LongTensor, input_lengths: List[int], return_as_dict=True):
-        """
-        :param input_batch: [batch_size, max_length]; batched padded input sequences
-        :param input_lengths: length of each padded input sequence.
-        :return: hidden states for last layer of last time step, the output of the last layer per time step and
-        the sequence lengths per example in the batch.
-        NB: The hidden states in the bidirectional case represent the final hidden state of each directional encoder,
-        meaning the whole sequence in both directions, whereas the output per time step represents different parts of
-        the sequences (0:t for the forward LSTM, t:T for the backward LSTM).
-        """
-        assert input_batch.shape[0] == input_lengths.shape[0], "Wrong amount of lengths passed to .forward()"
+    def encode_embedding(self, input_batch: torch.LongTensor):
         input_embeddings = self.embedding(input_batch)  # [batch_size, max_length, embedding_dim]
         input_embeddings = self.dropout(input_embeddings)  # [batch_size, max_length, embedding_dim]
-
+        return input_embeddings
+    
+    def forward_with_embedding(self, input_embeddings, input_lengths, return_as_dict):
         # Deprecated: No need to sort anymore. Sort the sequences by length in descending order.
         batch_size = input_embeddings.shape[0]
         max_length = input_embeddings.shape[1]
@@ -85,6 +77,62 @@ class EncoderRNN(nn.Module):
         # input_lengths = input_lengths[unperm_idx].tolist()
         
         return hidden, {"encoder_outputs": output_per_timestep, "sequence_lengths": input_lengths}
+    
+    def forward(
+        self, input_batch=None, input_lengths=None, input_embeddings=None,
+        return_as_dict=True, tag="encode_embedding"
+    ):
+        """
+        :param input_batch: [batch_size, max_length]; batched padded input sequences
+        :param input_lengths: length of each padded input sequence.
+        :return: hidden states for last layer of last time step, the output of the last layer per time step and
+        the sequence lengths per example in the batch.
+        NB: The hidden states in the bidirectional case represent the final hidden state of each directional encoder,
+        meaning the whole sequence in both directions, whereas the output per time step represents different parts of
+        the sequences (0:t for the forward LSTM, t:T for the backward LSTM).
+        """
+        
+        if tag == "encode_embedding":
+            input_embeddings = self.embedding(input_batch)  # [batch_size, max_length, embedding_dim]
+            input_embeddings = self.dropout(input_embeddings)  # [batch_size, max_length, embedding_dim]
+            return input_embeddings
+        elif tag == "forward_with_embedding" or tag == "forward":
+            if tag == "forward":
+                assert input_batch.shape[0] == input_lengths.shape[0], "Wrong amount of lengths passed to .forward()"
+                input_embeddings = self.embedding(input_batch)  # [batch_size, max_length, embedding_dim]
+                input_embeddings = self.dropout(input_embeddings)  # [batch_size, max_length, embedding_dim]
+            assert input_embeddings != None
+            # Deprecated: No need to sort anymore. Sort the sequences by length in descending order.
+            batch_size = input_embeddings.shape[0]
+            max_length = input_embeddings.shape[1]
+            # input_lengths = input_lengths.squeeze(dim=-1)
+            # input_lengths, perm_idx = torch.sort(input_lengths, descending=True)
+            # input_embeddings = input_embeddings.index_select(dim=0, index=perm_idx)
+            # packed_input = pack_padded_sequence(input_embeddings, input_lengths.cpu(), batch_first=True)
+
+            # RNN embedding.
+            output_per_timestep, (hidden, cell) = self.lstm(input_embeddings)
+
+            # hidden, cell [num_layers * num_directions, batch_size, embedding_dim]
+            # hidden and cell are unpacked, such that they store the last hidden state for each sequence in the batch.
+            # output_per_timestep, _ = pad_packed_sequence(
+            #     packed_output)  # [max_length, batch_size, hidden_size * num_directions]
+
+            # If biLSTM, sum the outputs for each direction
+            if self.bidirectional:
+                output_per_timestep = output_per_timestep.view(batch_size, max_length, 2, self.hidden_size)
+                output_per_timestep = torch.sum(output_per_timestep, 2)  # [max_length, batch_size, hidden_size]
+                hidden = torch.sum(hidden, 0)  # [num_layers, batch_size, hidden_size]
+            hidden = hidden # [batch_size, hidden_size] (get the last layer)
+
+            # Deprecated: No need to sort anymore. Sort the sequences by length in descending order.
+            # Reverse the sorting.
+            # _, unperm_idx = perm_idx.sort(0)
+            # hidden = hidden.index_select(dim=0, index=unperm_idx)
+            # output_per_timestep = output_per_timestep.index_select(dim=1, index=unperm_idx)
+            # input_lengths = input_lengths[unperm_idx].tolist()
+
+            return hidden, {"encoder_outputs": output_per_timestep, "sequence_lengths": input_lengths}
     
     def extra_repr(self) -> str:
         return "EncoderRNN\n bidirectional={} \n num_layers={}\n hidden_size={}\n dropout={}\n "\

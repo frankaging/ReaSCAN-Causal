@@ -19,6 +19,7 @@ import random
 import torch.nn.functional as F
 from tqdm import tqdm, trange
 
+from seq2seq.model import *
 from decode_abstract_models import *
 from seq2seq.ReaSCAN_dataset import *
 from seq2seq.helpers import *
@@ -317,20 +318,11 @@ def counterfactual_predict(
         target_max_seq_lens = max(target_lengths_batch)[0]
         dual_target_max_seq_lens = max(dual_target_lengths_batch)[0]
         min_len = min(target_max_seq_lens, dual_target_max_seq_lens)
-           
-        if random_attr:
-            intervene_attribute = random.choice([0,1,2])
-        if random_time:
-            intervene_time = random.randint(
-                1, max(target_lengths_batch)[0]-2
-            ) # we get rid of SOS and EOS tokens
-            # we also need to get the to-intervened time
-            intervene_with_time = random.randint(
-                1, max(dual_target_lengths_batch)[0]-2
-            ) # we get rid of SOS and EOS tokens
-        else:
-            intervene_with_time = intervene_time
-        # print(intervene_time, intervene_with_time, intervene_attribute)
+        
+        # TODO: We have enhance this to be variable later!
+        intervene_attribute = random.choice([0,1])
+        intervene_time = 1
+        intervene_with_time = 1
         #####################
         #
         # high data start
@@ -775,7 +767,7 @@ def main(flags):
                           **flags)
 
             # gpu setups
-            use_cuda = True if torch.cuda.is_available() and not isnotebook() else False
+            use_cuda = True if torch.cuda.is_available() and not isnotebook() and not flags["no_cuda"] else False
             device = torch.device("cuda" if use_cuda else "cpu")
             n_gpu = torch.cuda.device_count()
             # logger.info(f"device: {device}, and we recognize {n_gpu} gpu(s) in total.")

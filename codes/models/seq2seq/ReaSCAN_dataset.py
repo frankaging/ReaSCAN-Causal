@@ -281,12 +281,18 @@ class ReaSCANDataset(object):
             else:
                 situation_image = self._world.get_current_situation_image()
             target_commands = self.parse_command_repr(example["target_commands"])
+            verb_in_command = ""
+            if "verb_in_command" in example:
+                verb_in_command = example["verb_in_command"]
+            adverb_in_command = ""
+            if "adverb_in_command" in example:
+                adverb_in_command = example["adverb_in_command"]
             yield {"input_command": command, "input_meaning": meaning,
                    "derivation_representation": example.get("derivation"),
                    "situation_image": situation_image, "situation_representation": example["situation"],
                    "target_command": target_commands, "target_str": target_serialized_str, 
-                   "verb_in_command": example["verb_in_command"], 
-                   "adverb_in_command": example["adverb_in_command"]}
+                   "verb_in_command": verb_in_command, 
+                   "adverb_in_command": adverb_in_command}
     
     def read_vocabularies(self) -> {}:
         """
@@ -328,20 +334,23 @@ class ReaSCANDataset(object):
         target_lengths = self._target_lengths
         max_target_length = np.max(target_lengths)
         return max_target_length
-    
+
     def get_dual_dataset(self, novel_attribute=False):
         """
         Function for getting dual dataset for
         counterfactual training.
         """
-        examples = self._examples
-        # we may want to random shuffle the examples
-        # to make sure have a richer space of composities.
-        random.shuffle(examples)
-        
+        examples = self._examples        
         # get length.
         input_lengths = self._input_lengths
         target_lengths = self._target_lengths
+        # we may want to random shuffle the examples
+        # to make sure have a richer space of composities.
+        p = np.random.permutation(len(input_lengths))
+        examples = examples[p]
+        input_lengths = input_lengths[p]
+        target_lengths = target_lengths[p]
+        
         max_input_length = np.max(input_lengths)
         max_target_length = np.max(target_lengths)
         
@@ -414,7 +423,7 @@ class ReaSCANDataset(object):
         dual_verb_str_batch = [verb_str_batch[i] for i in perm_idx.tolist()]
         # we need to do a little extra work here just to generate
         # examples for novel attribute cases.
-
+        
         # here are the steps:
         # 1. find avaliable attributes to swap in both example.
         # 2. swap attribute, and get the updated action sequence, everything else stays the same.
@@ -429,6 +438,8 @@ class ReaSCANDataset(object):
         intervened_main_shape_index = []
         intervened_dual_shape_index = []
         intervened_target_batch = []
+        intervened_target_lengths_batch = []
+        intervened_swap_attr = [] # 0, 1, 2 maps to size, color, shape
         for i in range(0, batch_size):
             if not novel_attribute:
                 # we put dummies
@@ -440,6 +451,7 @@ class ReaSCANDataset(object):
                 intervened_main_shape_index += [main_shape_index]
                 intervened_dual_shape_index += [dual_shape_index]
                 intervened_target_batch += [padded_target]
+                intervened_target_lengths_batch += [0]
                 continue
             main_command_str = self.array_to_sentence(main_input_batch[i].tolist(), "input")
             dual_command_str = self.array_to_sentence(dual_input_batch[i].tolist(), "input")
@@ -453,18 +465,22 @@ class ReaSCANDataset(object):
             if target_sh != "" and dual_target_sh != "":
                 potential_swap_attr += ["shape"]
             swap_attr = random.choice(potential_swap_attr)
+            
             if swap_attr == "size":
                 swap_attr_main = target_si
                 swap_attr_dual = dual_target_si
                 new_composites = [dual_target_si, target_co, target_sh]
+                intervened_swap_attr += [0]
             elif swap_attr == "color":
                 swap_attr_main = target_co
                 swap_attr_dual = dual_target_co
                 new_composites = [target_si, dual_target_co, target_sh]
+                intervened_swap_attr += [1]
             elif swap_attr == "shape":
                 swap_attr_main = target_sh
                 swap_attr_dual = dual_target_sh
                 new_composites = [target_si, target_co, dual_target_sh]
+                intervened_swap_attr += [2]
             
             new_target_id = -1
             id_size_tuples = []
@@ -494,6 +510,7 @@ class ReaSCANDataset(object):
                 main_swap_index, dual_swap_index, main_shape_index, dual_shape_index = -1, -1, -1, -1
                 to_pad_target = max_target_length
                 padded_target = torch.zeros(int(to_pad_target), dtype=torch.long)
+                intervened_target_lengths_batch += [0]
             else:
                 # we have a new target, let us generate the action sequence as well.
                 new_target_pos = situation_representation_batch[i]["placed_objects"][new_target_id]["position"]
@@ -535,6 +552,7 @@ class ReaSCANDataset(object):
                     # only these are valid!
                     target_array = torch.tensor(target_array, dtype=torch.long)
                     to_pad_target = max_target_length - target_array.size(0)
+                    intervened_target_lengths_batch += [target_array.size(0)]
                     padded_target = torch.cat([
                         target_array,
                         torch.zeros(int(to_pad_target), dtype=torch.long)], dim=-1)
@@ -543,6 +561,7 @@ class ReaSCANDataset(object):
                     main_swap_index, dual_swap_index, main_shape_index, dual_shape_index = -1, -1, -1, -1
                     to_pad_target = max_target_length
                     padded_target = torch.zeros(int(to_pad_target), dtype=torch.long)
+                    intervened_target_lengths_batch += [0]
             
             # we now consolidate everything.
             intervened_main_swap_index += [main_swap_index]
@@ -556,6 +575,8 @@ class ReaSCANDataset(object):
         intervened_main_shape_index = torch.tensor(intervened_main_shape_index, dtype=torch.long)
         intervened_dual_shape_index = torch.tensor(intervened_dual_shape_index, dtype=torch.long)
         intervened_target_batch = torch.stack(intervened_target_batch, dim=0)
+        intervened_swap_attr = torch.tensor(intervened_swap_attr, dtype=torch.long)
+        intervened_target_lengths_batch = torch.tensor(intervened_target_lengths_batch, dtype=torch.long)
         
         if novel_attribute:
             main_dataset = TensorDataset(
@@ -567,7 +588,8 @@ class ReaSCANDataset(object):
                 dual_target_positions_batch, dual_input_lengths_batch, dual_target_lengths_batch,
                 # intervened dataset for novel attribute
                 intervened_main_swap_index, intervened_dual_swap_index, intervened_main_shape_index, 
-                intervened_dual_shape_index, intervened_target_batch,
+                intervened_dual_shape_index, intervened_target_batch, intervened_swap_attr, 
+                intervened_target_lengths_batch
             )
         else:
             main_dataset = TensorDataset(

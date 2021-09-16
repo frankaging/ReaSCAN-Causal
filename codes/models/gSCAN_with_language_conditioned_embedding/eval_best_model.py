@@ -117,12 +117,7 @@ if __name__ == "__main__":
     logging.basicConfig(format=FORMAT, level=logging.DEBUG,
                         datefmt="%Y-%m-%d %H:%M")
     logger = logging.getLogger(__name__)
-    use_cuda = True if torch.cuda.is_available() else False
     logger.info("Initialize logger")
-
-    if use_cuda:
-        logger.info("Using CUDA.")
-        logger.info("Cuda version: {}".format(torch.version.cuda))
 
     parser = argparse.ArgumentParser(description="LGCN models for GSCAN")
     parser.add_argument('--load', type=str, help='Path to model')
@@ -130,8 +125,15 @@ if __name__ == "__main__":
     parser.add_argument('--data_dir', type=str, help='Path to dataset')
     parser.add_argument('--seed', type=int, help='random seeds')
     parser.add_argument('--test_split', type=str, help='split to evaluate')
+    parser.add_argument("--use_cuda", dest="use_cuda", default=False,
+                        action="store_true", help="Whether to use cuda if available.")
     parser.set_defaults(is_baseline=False)
     args = parser.parse_args()
+
+    use_cuda = args.use_cuda if torch.cuda.is_available() else False
+    if use_cuda:
+        logger.info("Using CUDA.")
+        logger.info("Cuda version: {}".format(torch.version.cuda))
 
     random.seed(args.seed)
     torch.manual_seed(args.seed)

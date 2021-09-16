@@ -218,6 +218,7 @@ class Model(nn.Module):
     def forward(self, 
                 # raw inputs
                 commands_input=None, 
+                commands_embedding=None,
                 commands_lengths=None, 
                 situations_input=None,
                 target_batch=None,
@@ -249,10 +250,22 @@ class Model(nn.Module):
                ):
         if tag == "situation_encode":
             return self.situation_encoder(situations_input)
+        elif tag == "command_input_encode_embedding":
+            return self.encoder(
+                input_batch=commands_input, 
+                tag="encode_embedding"
+            )
+        elif tag == "command_input_encode_no_dict_with_embedding":
+            return self.encoder(
+                input_embeddings=commands_embedding, 
+                input_lengths=commands_lengths,
+                tag="forward_with_embedding"
+            )
         elif tag == "command_input_encode_no_dict":
             return self.encoder(
                 input_batch=commands_input, 
                 input_lengths=commands_lengths,
+                tag="forward"
             )
         elif tag == "command_input_encode":
             hidden, encoder_outputs = self.encoder(

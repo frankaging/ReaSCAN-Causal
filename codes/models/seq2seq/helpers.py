@@ -174,6 +174,7 @@ def arg_parse():
                         help="Whether to restrict samples from counterfactual training have no overlap with test samples.")
     parser.add_argument("--counterfactual_evaluate", dest="counterfactual_evaluate", default=False, action="store_true",
                         help="Whether to evaluate with counterfactual objective.")
+    parser.add_argument("--intervene_position", type=str, default="embedding", choices=['embedding', 'hidden', 'last_hidden'], help="This is to set where to intervene in the neural network.")
     
     try:
         get_ipython().run_line_magic('matplotlib', 'inline')
