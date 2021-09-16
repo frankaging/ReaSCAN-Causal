@@ -771,7 +771,9 @@ def train(
                 if use_cuda and n_gpu > 1:
                     cf_loss = cf_loss.mean() # mean() to average on multi-gpu.
             
-            loss = task_loss
+            # LOSS COMBO
+            loss = task_loss + ((cf_loss + cf_position_loss)*cf_loss_weight)
+
             # Backward pass and update model parameters.
             loss.backward()
             optimizer.step()
