@@ -424,6 +424,19 @@ class ReaSCANDataset(object):
         # we need to do a little extra work here just to generate
         # examples for novel attribute cases.
         
+        if not novel_attribute:
+            main_dataset = TensorDataset(
+                # main dataset
+                main_input_batch, main_target_batch, main_situation_batch, main_agent_positions_batch, 
+                main_target_positions_batch, main_input_lengths_batch, main_target_lengths_batch,
+                # dual dataset
+                dual_input_batch, dual_target_batch, dual_situation_batch, dual_agent_positions_batch,
+                dual_target_positions_batch, dual_input_lengths_batch, dual_target_lengths_batch,
+            )
+            # with non-tensorized outputs
+            return main_dataset, (situation_representation_batch, derivation_representation_batch)
+            # the last two items are deprecated. we need to fix them to make them usable.
+        
         # here are the steps:
         # 1. find avaliable attributes to swap in both example.
         # 2. swap attribute, and get the updated action sequence, everything else stays the same.

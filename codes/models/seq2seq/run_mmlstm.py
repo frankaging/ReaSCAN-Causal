@@ -353,7 +353,7 @@ def train(
         logger.info("Loaded checkpoint '{}' (iter {})".format(resume_from_file, start_iteration))
     
     # Loading dataset and preprocessing a bit.
-    train_data, _ = training_set.get_dataset()
+    train_data, _ = training_set.get_dual_dataset()
     train_sampler = RandomSampler(train_data)
     train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.training_batch_size)
     test_data, _ = test_set.get_dual_dataset()
@@ -381,7 +381,7 @@ def train(
         # Shuffle the dataset and loop over it.
         for step, batch in enumerate(train_dataloader):
             # main batch
-            input_batch, target_batch, situation_batch,                 agent_positions_batch, target_positions_batch,                 input_lengths_batch, target_lengths_batch = batch
+            input_batch, target_batch, situation_batch,                 agent_positions_batch, target_positions_batch,                 input_lengths_batch, target_lengths_batch,                 dual_input_batch, dual_target_batch, dual_situation_batch,                 dual_agent_positions_batch, dual_target_positions_batch,                 dual_input_lengths_batch, dual_target_lengths_batch = batch
             is_best = False
             model.train()
             
