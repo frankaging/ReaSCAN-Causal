@@ -424,6 +424,19 @@ class ReaSCANDataset(object):
         # we need to do a little extra work here just to generate
         # examples for novel attribute cases.
         
+        if not novel_attribute:
+            main_dataset = TensorDataset(
+                # main dataset
+                main_input_batch, main_target_batch, main_situation_batch, main_agent_positions_batch, 
+                main_target_positions_batch, main_input_lengths_batch, main_target_lengths_batch,
+                # dual dataset
+                dual_input_batch, dual_target_batch, dual_situation_batch, dual_agent_positions_batch,
+                dual_target_positions_batch, dual_input_lengths_batch, dual_target_lengths_batch,
+            )
+            # with non-tensorized outputs
+            return main_dataset, (situation_representation_batch, derivation_representation_batch)
+            # the last two items are deprecated. we need to fix them to make them usable.
+        
         # here are the steps:
         # 1. find avaliable attributes to swap in both example.
         # 2. swap attribute, and get the updated action sequence, everything else stays the same.
@@ -541,7 +554,8 @@ class ReaSCANDataset(object):
                     self._world.move_object_to_wall(action=verb_str_batch[i], manner=adverb_str_batch[i])
                 target_commands, _ = self._world.get_current_observations()
                 target_array = self.sentence_to_array(target_commands, vocabulary="target")
-
+                self._world.clear_situation()
+                
                 # now, we need to get the index of words in the sequence that need to be swapped.
                 main_swap_index = main_command_str.index(swap_attr_main)
                 dual_swap_index = dual_command_str.index(swap_attr_dual)
@@ -578,29 +592,19 @@ class ReaSCANDataset(object):
         intervened_swap_attr = torch.tensor(intervened_swap_attr, dtype=torch.long)
         intervened_target_lengths_batch = torch.tensor(intervened_target_lengths_batch, dtype=torch.long)
         
-        if novel_attribute:
-            main_dataset = TensorDataset(
-                # main dataset
-                main_input_batch, main_target_batch, main_situation_batch, main_agent_positions_batch, 
-                main_target_positions_batch, main_input_lengths_batch, main_target_lengths_batch,
-                # dual dataset
-                dual_input_batch, dual_target_batch, dual_situation_batch, dual_agent_positions_batch,
-                dual_target_positions_batch, dual_input_lengths_batch, dual_target_lengths_batch,
-                # intervened dataset for novel attribute
-                intervened_main_swap_index, intervened_dual_swap_index, intervened_main_shape_index, 
-                intervened_dual_shape_index, intervened_target_batch, intervened_swap_attr, 
-                intervened_target_lengths_batch
-            )
-        else:
-            main_dataset = TensorDataset(
-                # main dataset
-                main_input_batch, main_target_batch, main_situation_batch, main_agent_positions_batch, 
-                main_target_positions_batch, main_input_lengths_batch, main_target_lengths_batch,
-                # dual dataset
-                dual_input_batch, dual_target_batch, dual_situation_batch, dual_agent_positions_batch,
-                dual_target_positions_batch, dual_input_lengths_batch, dual_target_lengths_batch,
-            )
-            
+        assert novel_attribute == True
+        main_dataset = TensorDataset(
+            # main dataset
+            main_input_batch, main_target_batch, main_situation_batch, main_agent_positions_batch, 
+            main_target_positions_batch, main_input_lengths_batch, main_target_lengths_batch,
+            # dual dataset
+            dual_input_batch, dual_target_batch, dual_situation_batch, dual_agent_positions_batch,
+            dual_target_positions_batch, dual_input_lengths_batch, dual_target_lengths_batch,
+            # intervened dataset for novel attribute
+            intervened_main_swap_index, intervened_dual_swap_index, intervened_main_shape_index, 
+            intervened_dual_shape_index, intervened_target_batch, intervened_swap_attr, 
+            intervened_target_lengths_batch
+        )  
         # with non-tensorized outputs
         return main_dataset, (situation_representation_batch, derivation_representation_batch)
         # the last two items are deprecated. we need to fix them to make them usable.
