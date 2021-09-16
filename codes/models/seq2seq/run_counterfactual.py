@@ -18,7 +18,7 @@ import time
 import random
 import torch.nn.functional as F
 
-from decode_graphical_models import *
+from model import *
 from decode_abstract_models import *
 from seq2seq.ReaSCAN_dataset import *
 from seq2seq.helpers import *
@@ -176,7 +176,7 @@ def predict(
                 cf_target_positions_x = F.log_softmax(cf_target_positions_x, dim=-1)
                 cf_target_positions_y = model(
                     position_hidden=hidden[0][:,:,y_s_idx:y_e_idx].squeeze(dim=1),
-                    cf_auxiliary_task_tag="y",
+                    cf_auxiliary_task_tag="x",
                     tag="cf_auxiliary_task"
                 )
                 cf_target_positions_y = F.log_softmax(cf_target_positions_y, dim=-1)
@@ -307,6 +307,7 @@ def train(
     intervene_time: int,
     intervene_dimension_size: int,
     include_cf_auxiliary_loss: bool,
+    no_cuda: bool,
     max_training_examples=None, 
     seed=42,
     **kwargs
@@ -399,7 +400,7 @@ def train(
                   **cfg)
     
     # gpu setups
-    use_cuda = True if torch.cuda.is_available() and not isnotebook() else False
+    use_cuda = True if torch.cuda.is_available() and not isnotebook() and not no_cuda else False
     device = torch.device("cuda" if use_cuda else "cpu")
     n_gpu = torch.cuda.device_count()
     logger.info(f"device: {device}, and we recognize {n_gpu} gpu(s) in total.")
@@ -448,12 +449,7 @@ def train(
     """
     We have two low model so that our computation is much faster.
     """
-    low_model = ReaSCANMultiModalLSTMCompGraph(
-         model,
-         train_max_decoding_steps,
-         is_cf=False,
-         cache_results=False
-    )
+    low_model = None
 
     # create high level model for counterfactual training.
     # WARNING: we are not using antra for high model.
@@ -872,7 +868,7 @@ def train(
                             cf_target_positions_x = F.log_softmax(cf_target_positions_x, dim=-1)
                             cf_target_positions_y = model(
                                 position_hidden=dual_hidden[0][:,:,y_s_idx:y_e_idx].squeeze(dim=1),
-                                cf_auxiliary_task_tag="y",
+                                cf_auxiliary_task_tag="x",
                                 tag="cf_auxiliary_task"
                             )
                             cf_target_positions_y = F.log_softmax(cf_target_positions_y, dim=-1)
@@ -951,9 +947,13 @@ def train(
 
             if include_cf_auxiliary_loss:
                 if loss != None:
-                    loss += cf_position_loss
+                    if cf_position_loss:
+                        loss += cf_position_loss
                 else:
-                    loss = cf_position_loss
+                    if cf_position_loss:
+                        loss = cf_position_loss
+                    else:
+                        loss = 0.
                 
             # Backward pass and update model parameters.
             loss.backward()
@@ -987,8 +987,9 @@ def train(
                 else:
                     cf_loss, cf_accuracy, cf_exact_match = 0.0, 0.0, 0.0
                 
-                if not include_cf_auxiliary_loss:
+                if not include_cf_auxiliary_loss or not cf_position_loss:
                     metrics_position_x, metrics_position_y = 0.0, 0.0
+                    cf_position_loss = 0.0
                     
                 learning_rate = scheduler.get_lr()[0]
                 logger.info("Iteration %08d, task loss %8.4f, cf loss %8.4f, cf pos loss %8.4f, accuracy %5.2f, exact match %5.2f, "

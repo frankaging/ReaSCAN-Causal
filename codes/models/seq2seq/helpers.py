@@ -166,6 +166,8 @@ def arg_parse():
     parser.add_argument("--include_cf_auxiliary_loss", dest="include_cf_auxiliary_loss", default=False, action="store_true",
                         help="If set to true, the model predicts the target location from the joint attention over the "
                              "input instruction and world state.")
+    parser.add_argument("--no_cuda", dest="no_cuda", default=False, action="store_true",
+                        help="Whether to use cuda if avaliable.")
     
     try:
         get_ipython().run_line_magic('matplotlib', 'inline')
