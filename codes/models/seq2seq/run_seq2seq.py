@@ -72,8 +72,7 @@ def predict(
         
         # derivation_spec
         # situation_spec
-        input_sequence, target_sequence, situation,             agent_positions, target_positions,             input_lengths, target_lengths, 
-            dual_input_sequence, dual_target_sequence, dual_situation,             dual_agent_positions, dual_target_positions,             dual_input_lengths, dual_target_lengths = batch
+        input_sequence, target_sequence, situation,             agent_positions, target_positions,             input_lengths, target_lengths,             dual_input_sequence, dual_target_sequence, dual_situation,             dual_agent_positions, dual_target_positions,             dual_input_lengths, dual_target_lengths = batch
         
         input_max_seq_lens = max(input_lengths)[0]
         target_max_seq_lens = max(target_lengths)[0]
