@@ -794,7 +794,7 @@ def train(
             
             # Print current metrics.
             if training_iteration % print_every == 0:
-                
+                task_loss_to_write = task_loss.clone()
                 # main task evaluation
                 accuracy, exact_match = model(
                     loss_target_scores=target_scores, 
