@@ -779,7 +779,7 @@ def train(
             loss = task_loss
             if include_cf_loss:
                 loss += cf_loss*cf_loss_weight 
-            if include_cf_auxiliary_loss
+            if include_cf_auxiliary_loss:
                 loss += cf_loss*cf_position_loss
 
             # Backward pass and update model parameters.
