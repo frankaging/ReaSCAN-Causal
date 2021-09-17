@@ -512,6 +512,7 @@ def train(
             cf_high_actions = high_actions
             intervened_target_batch = [torch.ones(high_hidden_states.size(0), 1).long().to(device)] # SOS tokens
             intervened_target_lengths_batch = torch.zeros(high_hidden_states.size(0), 1).long().to(device)
+            saved_intervened_high_hidden_states = None
             # we need to take of the SOS and EOS tokens.
             for j in range(train_max_decoding_steps-1):
                 # intercept like antra!
@@ -528,6 +529,7 @@ def train(
 
                     # only swap out this part.
                     cf_high_hidden_states[:,intervene_attribute] = dual_high_hidden_states[:,intervene_attribute]
+                    saved_intervened_high_hidden_states = cf_high_hidden_states.clone()
                     cf_high_actions = torch.zeros(
                         dual_high_hidden_states.size(0), 1
                     ).long().to(device)
