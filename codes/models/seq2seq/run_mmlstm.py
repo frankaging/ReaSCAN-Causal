@@ -427,7 +427,7 @@ def train(
             cf_sample_per_batch = int(batch_size*cf_sample_per_batch_in_percentage)   
             auxiliary_accuracy_target = 0.
             metrics_position_x, metrics_position_y = 0.0, 0.0
-            cf_accuracy, cf_exact_match = 0.0, 0.0, 0.0
+            cf_accuracy, cf_exact_match = 0.0, 0.0
             
             # we use the main hidden to track.
             task_encoded_image = model(
