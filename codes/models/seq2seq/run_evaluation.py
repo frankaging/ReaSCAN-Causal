@@ -53,7 +53,7 @@ def predict(
     device,
     intervene_time,
     intervene_dimension_size,
-) -> torch.Tensor:
+):
     """
     Loop over all data in data_iterator and predict until <EOS> token is reached.
     :param data_iterator: iterator containing the data to predict
