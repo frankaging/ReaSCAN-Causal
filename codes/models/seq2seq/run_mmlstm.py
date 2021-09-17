@@ -418,13 +418,17 @@ def train(
             dual_input_lengths_batch = dual_input_lengths_batch.to(device)
             dual_target_lengths_batch = dual_target_lengths_batch.to(device)
             
+            # init
             loss = 0.0
             task_loss = 0.0
             cf_loss = 0.0
             cf_position_loss = 0.0
             batch_size = agent_positions_batch.size(0)
-            cf_sample_per_batch = int(batch_size*cf_sample_per_batch_in_percentage)
-
+            cf_sample_per_batch = int(batch_size*cf_sample_per_batch_in_percentage)   
+            auxiliary_accuracy_target = 0.
+            metrics_position_x, metrics_position_y = 0.0, 0.0
+            cf_accuracy, cf_exact_match = 0.0, 0.0, 0.0
+            
             # we use the main hidden to track.
             task_encoded_image = model(
                 situations_input=situation_batch,
@@ -772,7 +776,11 @@ def train(
                     cf_loss = cf_loss.mean() # mean() to average on multi-gpu.
             
             # LOSS COMBO
-            loss = task_loss + ((cf_loss + cf_position_loss)*cf_loss_weight)
+            loss = task_loss
+            if include_cf_loss:
+                loss += cf_loss*cf_loss_weight 
+            if include_cf_auxiliary_loss
+                loss += cf_loss*cf_position_loss
 
             # Backward pass and update model parameters.
             loss.backward()
@@ -786,24 +794,44 @@ def train(
             
             # Print current metrics.
             if training_iteration % print_every == 0:
+                
+                # main task evaluation
                 accuracy, exact_match = model(
                     loss_target_scores=target_scores, 
                     loss_target_batch=target_batch,
                     tag="get_metrics"
                 )
-                if auxiliary_task:
-                    pass
-                else:
-                    auxiliary_accuracy_target = 0.
+                # cf evaluation
+                if include_cf_loss:
+                    cf_accuracy, cf_exact_match = model(
+                        loss_target_scores=intervened_scores_batch, 
+                        loss_target_batch=intervened_target_batch,
+                        tag="get_metrics"
+                    )
+
+                auxiliary_accuracy_target = 0.
                 learning_rate = scheduler.get_lr()[0]
-                logger.info("Iteration %08d, loss %8.4f, accuracy %5.2f, exact match %5.2f, learning_rate %.5f,"
-                            " aux. accuracy target pos %5.2f" % (training_iteration, loss, accuracy, exact_match,
-                                                                 learning_rate, auxiliary_accuracy_target))
+                logger.info("Iteration %08d, task loss %8.4f, cf loss %8.4f, cf pos loss %8.4f, accuracy %5.2f, exact match %5.2f, "
+                            "cf count %03d, cf accuracy %5.2f, cf exact match %5.2f, cf pos_x %5.2f, cf pos_y %5.2f,"
+                            " learning_rate %.5f" % (
+                                training_iteration, task_loss_to_write, cf_loss, cf_position_loss, accuracy, exact_match,
+                                len(idx_selected), cf_accuracy, cf_exact_match, metrics_position_x, metrics_position_y,
+                                learning_rate,
+                # logging to wandb.
                 if is_wandb:
                     wandb.log({'train/training_iteration': training_iteration})
-                    wandb.log({'train/task_loss': loss})
+                    wandb.log({'train/task_loss': task_loss_to_write})
                     wandb.log({'train/task_accuracy': accuracy})
                     wandb.log({'train/task_exact_match': exact_match})
+                    if cf_loss and len(idx_selected) != 0:
+                        wandb.log({'train/counterfactual_loss': cf_loss})
+                        wandb.log({'train/counterfactual count': len(idx_selected)})
+                        wandb.log({'train/counterfactual_accuracy': cf_accuracy})
+                        wandb.log({'train/counterfactual_exact_match': cf_exact_match})
+                    if include_cf_auxiliary_loss and len(idx_selected) != 0:
+                        wandb.log({'train/pred_target_position_x': metrics_position_y})
+                        wandb.log({'train/pred_target_position_y': metrics_position_y})
+                    wandb.log({'train/learning_rate': learning_rate})
                     
             # Evaluate on test set.
             if training_iteration % evaluate_every == 0:
