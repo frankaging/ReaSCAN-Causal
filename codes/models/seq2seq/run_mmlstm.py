@@ -817,6 +817,7 @@ def train(
                                 training_iteration, task_loss_to_write, cf_loss, cf_position_loss, accuracy, exact_match,
                                 len(idx_selected), cf_accuracy, cf_exact_match, metrics_position_x, metrics_position_y,
                                 learning_rate,
+                            ))
                 # logging to wandb.
                 if is_wandb:
                     wandb.log({'train/training_iteration': training_iteration})
