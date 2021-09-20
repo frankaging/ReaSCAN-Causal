@@ -782,7 +782,7 @@ def train(
             if include_cf_loss:
                 loss += cf_loss*cf_loss_weight 
             if include_cf_auxiliary_loss:
-                loss += cf_loss*cf_position_loss
+                loss += cf_position_loss*cf_loss_weight
 
             # Backward pass and update model parameters.
             loss.backward()
@@ -804,12 +804,11 @@ def train(
                     tag="get_metrics"
                 )
                 # cf evaluation
-                if include_cf_loss:
-                    cf_accuracy, cf_exact_match = model(
-                        loss_target_scores=intervened_scores_batch, 
-                        loss_target_batch=intervened_target_batch,
-                        tag="get_metrics"
-                    )
+                cf_accuracy, cf_exact_match = model(
+                    loss_target_scores=intervened_scores_batch, 
+                    loss_target_batch=intervened_target_batch,
+                    tag="get_metrics"
+                )
 
                 auxiliary_accuracy_target = 0.
                 learning_rate = scheduler.get_lr()[0]

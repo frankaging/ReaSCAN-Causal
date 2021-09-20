@@ -501,16 +501,16 @@ class ReaSCANDataset(object):
             new_target_id = -1
             id_size_tuples = []
             for k, v in situation_representation_batch[i]["placed_objects"].items():
-                if v["object"]["shape"] == dual_target_sh:
+                if v["object"]["shape"] == new_composites[2]:
                     if target_co != "":
-                        if v["object"]["color"] == target_co:
-                            id_size_tuples.append((k, v["object"]["size"]))
+                        if v["object"]["color"] == new_composites[1]:
+                            id_size_tuples.append((k, int(v["object"]["size"])))
                     else:
                         id_size_tuples.append((k, int(v["object"]["size"])))
 
             if target_si != "":
                 # we need to ground size relatively?
-                if len(id_size_tuples) >= 2:
+                if len(id_size_tuples) == 2:
                     id_size_tuples = sorted(id_size_tuples, key=lambda x: x[1])
                     # only more than 2 we can have relative stuffs.
                     if target_si == "big":
@@ -528,6 +528,12 @@ class ReaSCANDataset(object):
                 intervened_padded_target = torch.zeros(int(to_pad_target), dtype=torch.long)
                 intervened_target_lengths_batch += [0]
             else:
+                new_target_shape = situation_representation_batch[i]["placed_objects"][new_target_id]['object']['shape']
+                new_target_color = situation_representation_batch[i]["placed_objects"][new_target_id]['object']['color']
+                assert new_target_shape == new_composites[2]
+                if new_composites[1] != "":
+                    assert new_target_color == new_composites[1]
+
                 # we have a new target, let us generate the action sequence as well.
                 new_target_pos = situation_representation_batch[i]["placed_objects"][new_target_id]["position"]
                 self._world.clear_situation()
@@ -552,7 +558,12 @@ class ReaSCANDataset(object):
                     manner=adverb_str_batch[i], 
                     primitive_command="walk"
                 )
-                
+
+                if len(adverb_str_batch[i].split(" ")) > 1:
+                    assert adverb_str_batch[i].split(" ")[-1] in main_command_str
+                elif len(adverb_str_batch[i]) != 0:
+                    assert adverb_str_batch[i] in main_command_str
+
                 if verb_str_batch[i] != "walk":
                     self._world.move_object_to_wall(action=verb_str_batch[i], manner=adverb_str_batch[i])
                 target_commands, _ = self._world.get_current_observations()
@@ -564,6 +575,18 @@ class ReaSCANDataset(object):
                 dual_swap_index = dual_command_str.index(swap_attr_dual)
                 main_shape_index = main_command_str.index(target_sh)
                 dual_shape_index = dual_command_str.index(dual_target_sh)
+                
+                assert main_command_str[main_shape_index] in ["circle", "square", "cylinder"]
+                assert dual_command_str[dual_shape_index] in ["circle", "square", "cylinder"]
+                if intervened_swap_attr[-1] == 0:
+                    assert main_command_str[main_swap_index] in ["", "small", "big"]
+                    assert dual_command_str[dual_swap_index] in ["", "small", "big"]
+                elif intervened_swap_attr[-1] == 1:
+                    assert main_command_str[main_swap_index] in ["", "red", "blue", "green", "yellow"]
+                    assert dual_command_str[dual_swap_index] in ["", "red", "blue", "green", "yellow"]
+                elif intervened_swap_attr[-1] == 2:
+                    assert main_command_str[main_swap_index] in ["circle", "cylinder", "square", "box"]
+                    assert dual_command_str[dual_swap_index] in ["circle", "cylinder", "square", "box"]
                 
                 if len(target_array) <= max_target_length:
                     # only these are valid!
