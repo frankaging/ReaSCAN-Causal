@@ -476,11 +476,11 @@ class ReaSCANDataset(object):
             target_si, target_co, target_sh = target_str_batch[i].split(",")
             dual_target_si, dual_target_co, dual_target_sh = dual_target_str_batch[i].split(",")
             potential_swap_attr = []
-            if target_si != "" and dual_target_si != "":
+            if target_si != "" and dual_target_si != "" and target_si == dual_target_si:
                 potential_swap_attr += ["size"]
-            if target_co != "" and dual_target_co != "":
+            if target_co != "" and dual_target_co != "" and target_co == dual_target_co:
                 potential_swap_attr += ["color"]
-            if target_sh != "" and dual_target_sh != "":
+            if target_sh != "" and dual_target_sh != "" and target_sh == dual_target_sh:
                 potential_swap_attr += ["shape"]
             swap_attr = random.choice(potential_swap_attr)
             
