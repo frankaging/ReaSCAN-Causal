@@ -502,7 +502,7 @@ class ReaSCANDataset(object):
             id_size_tuples = []
             for k, v in situation_representation_batch[i]["placed_objects"].items():
                 if v["object"]["shape"] == new_composites[2]:
-                    if target_co != "":
+                    if new_composites[1] != "":
                         if v["object"]["color"] == new_composites[1]:
                             id_size_tuples.append((k, int(v["object"]["size"])))
                     else:

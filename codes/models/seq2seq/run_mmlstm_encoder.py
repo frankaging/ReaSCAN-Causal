@@ -583,8 +583,6 @@ def train(
                     )
                     intervened_commands_embedding = commands_embedding
                     for i in range(len(idx_selected)):
-                        print(intervened_target_lengths_batch[i])
-                        print(intervened_target_batch[i])
                         assert intervened_main_swap_index[i] != -1
                         intervened_commands_embedding[
                             i,intervened_main_swap_index[i]:intervened_main_swap_index[i]+1
