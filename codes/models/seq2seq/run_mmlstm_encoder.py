@@ -637,32 +637,14 @@ def train(
                     if use_cuda and n_gpu > 1:
                         cf_loss = cf_loss.mean() # mean() to average on multi-gpu.
                 elif intervene_position == "hidden":
-                    commands_embedding = model(
-                        commands_input=input_batch, 
-                        tag="command_input_encode_embedding"
-                    )
-                    dual_commands_embedding = model(
-                        commands_input=dual_input_batch, 
-                        tag="command_input_encode_embedding"
-                    )
-                    hidden, encoder_outputs = model(
-                        commands_embedding=commands_embedding, 
-                        commands_lengths=input_lengths_batch,
-                        tag="command_input_encode_no_dict_with_embedding"
-                    )
-                    dual_hidden, dual_encoder_outputs = model(
-                        commands_embedding=dual_commands_embedding, 
-                        commands_lengths=dual_input_lengths_batch,
-                        tag="command_input_encode_no_dict_with_embedding"
-                    )
-                    print(dual_encoder_outputs["encoder_outputs"].shape)
-                    
+                    pass
                 elif intervene_position == "last_hidden":
-                    # TODO
                     pass
                 
             # LOSS COMBO
-            loss = task_loss
+            loss = 0.0
+            if include_task_loss:
+                loss += task_loss
             if include_cf_loss:
                 loss += cf_loss*cf_loss_weight 
             if include_cf_auxiliary_loss:
