@@ -475,7 +475,7 @@ class ReaSCANDataset(object):
             dual_command_str = self.array_to_sentence(dual_input_batch[i].tolist(), "input")
             target_si, target_co, target_sh = target_str_batch[i].split(",")
             dual_target_si, dual_target_co, dual_target_sh = dual_target_str_batch[i].split(",")
-            potential_swap_attr = []
+            potential_swap_attr = [""]
             if target_si != "" and dual_target_si != "" and target_si == dual_target_si:
                 potential_swap_attr += ["size"]
             if target_co != "" and dual_target_co != "" and target_co == dual_target_co:
@@ -501,27 +501,28 @@ class ReaSCANDataset(object):
                 intervened_swap_attr += [2]
             
             new_target_id = -1
-            id_size_tuples = []
-            for k, v in situation_representation_batch[i]["placed_objects"].items():
-                if v["object"]["shape"] == new_composites[2]:
-                    if new_composites[1] != "":
-                        if v["object"]["color"] == new_composites[1]:
+            if swap_attr != "":
+                id_size_tuples = []
+                for k, v in situation_representation_batch[i]["placed_objects"].items():
+                    if v["object"]["shape"] == new_composites[2]:
+                        if new_composites[1] != "":
+                            if v["object"]["color"] == new_composites[1]:
+                                id_size_tuples.append((k, int(v["object"]["size"])))
+                        else:
                             id_size_tuples.append((k, int(v["object"]["size"])))
-                    else:
-                        id_size_tuples.append((k, int(v["object"]["size"])))
 
-            if target_si != "":
-                # we need to ground size relatively?
-                if len(id_size_tuples) == 2:
-                    id_size_tuples = sorted(id_size_tuples, key=lambda x: x[1])
-                    # only more than 2 we can have relative stuffs.
-                    if target_si == "big":
-                        new_target_id = id_size_tuples[-1][0]
-                    elif target_si == "small":
+                if target_si != "":
+                    # we need to ground size relatively?
+                    if len(id_size_tuples) == 2:
+                        id_size_tuples = sorted(id_size_tuples, key=lambda x: x[1])
+                        # only more than 2 we can have relative stuffs.
+                        if target_si == "big":
+                            new_target_id = id_size_tuples[-1][0]
+                        elif target_si == "small":
+                            new_target_id = id_size_tuples[0][0]
+                else:
+                    if len(id_size_tuples) == 1:
                         new_target_id = id_size_tuples[0][0]
-            else:
-                if len(id_size_tuples) == 1:
-                    new_target_id = id_size_tuples[0][0]
             
             if new_target_id == -1:
                 # we don't have a new target, we need to use some dummy data!
