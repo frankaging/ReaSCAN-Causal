@@ -456,7 +456,6 @@ class ReaSCANDataset(object):
         intervened_target_batch = []
         intervened_target_lengths_batch = []
         intervened_swap_attr = [] # 0, 1, 2 maps to size, color, shape
-        intervened_target_str = []
         for i in range(0, batch_size):
             if not novel_attribute:
                 # we put dummies
@@ -469,7 +468,6 @@ class ReaSCANDataset(object):
                 intervened_dual_shape_index += [dual_shape_index]
                 intervened_target_batch += [intervened_padded_target]
                 intervened_target_lengths_batch += [0]
-                intervened_target_str += [""]
                 continue
             main_command_str = self.array_to_sentence(main_input_batch[i].tolist(), "input")
             dual_command_str = self.array_to_sentence(dual_input_batch[i].tolist(), "input")
@@ -499,6 +497,8 @@ class ReaSCANDataset(object):
                 swap_attr_dual = dual_target_sh
                 new_composites = [target_si, target_co, dual_target_sh]
                 intervened_swap_attr += [2]
+            else:
+                intervened_swap_attr += [-1]
             
             new_target_id = -1
             if swap_attr != "":
@@ -530,7 +530,6 @@ class ReaSCANDataset(object):
                 to_pad_target = max_target_length
                 intervened_padded_target = torch.zeros(int(to_pad_target), dtype=torch.long)
                 intervened_target_lengths_batch += [0]
-                intervened_target_str += [""]
             else:
                 new_target_shape = situation_representation_batch[i]["placed_objects"][new_target_id]['object']['shape']
                 new_target_color = situation_representation_batch[i]["placed_objects"][new_target_id]['object']['color']
@@ -600,7 +599,6 @@ class ReaSCANDataset(object):
                     intervened_padded_target = torch.cat([
                         target_array,
                         torch.zeros(int(to_pad_target), dtype=torch.long)], dim=-1)
-                    intervened_target_str += [",".join(new_composites)]
                     print(dual_target_str_batch[i])
                     print(target_str_batch[i])
                     print(",".join(new_composites))
