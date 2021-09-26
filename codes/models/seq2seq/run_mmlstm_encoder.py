@@ -690,9 +690,8 @@ def train(
                         ] = dual_encoder_outputs["encoder_outputs"][
                             i,intervened_dual_shape_index[i]:intervened_dual_shape_index[i]+1,start_idx:end_idx
                         ]
-                        print(intervened_encoder_outputs.shape)
                         start_idx = intervened_swap_attr[i]
-                        end_idx = (intervened_swap_attr[i]+1)*25 # this is a little hacky here.
+                        end_idx = (intervened_swap_attr[i]+1)*intervene_dimension_size
                         intervened_hidden[i,start_idx:end_idx] = hidden[i,start_idx:end_idx]
                     hidden = model(
                         command_hidden=intervened_hidden,
