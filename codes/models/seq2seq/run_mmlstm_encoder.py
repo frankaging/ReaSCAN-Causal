@@ -588,14 +588,6 @@ def train(
                         commands_input=intervened_input_batch, 
                         tag="command_input_encode_embedding"
                     )
-#                     commands_embedding = model(
-#                         commands_input=input_batch, 
-#                         tag="command_input_encode_embedding"
-#                     )
-#                     dual_commands_embedding = model(
-#                         commands_input=dual_input_batch, 
-#                         tag="command_input_encode_embedding"
-#                     )
                     encoded_image = model(
                         situations_input=situation_batch,
                         tag="situation_encode"
@@ -666,9 +658,58 @@ def train(
                         command_encoder_outputs=intervened_encoder_outputs,
                         tag="projected_keys_textual"
                     )
-                    
                 elif intervene_position == "last_hidden":
-                    pass
+                    commands_embedding = model(
+                        commands_input=input_batch, 
+                        tag="command_input_encode_embedding"
+                    )
+                    dual_commands_embedding = model(
+                        commands_input=dual_input_batch, 
+                        tag="command_input_encode_embedding"
+                    )
+                    hidden, encoder_outputs = model(
+                        commands_embedding=commands_embedding, 
+                        commands_lengths=input_lengths_batch,
+                        tag="command_input_encode_no_dict_with_embedding"
+                    )
+                    dual_hidden, dual_encoder_outputs = model(
+                        commands_embedding=dual_commands_embedding, 
+                        commands_lengths=input_lengths_batch,
+                        tag="command_input_encode_no_dict_with_embedding"
+                    )
+                    # intervene on lstm hidden.
+                    intervened_encoder_outputs = encoder_outputs["encoder_outputs"]
+                    # intervene on init hidden as well.
+                    intervened_hidden = hidden
+                    for i in range(len(idx_selected)):
+                        assert intervened_main_swap_index[i] != -1
+                        start_idx = intervened_swap_attr[i]
+                        end_idx = (intervened_swap_attr[i]+1)*intervene_dimension_size # this is a little hacky here.
+                        intervened_encoder_outputs[
+                            i,intervened_main_shape_index[i]:intervened_main_shape_index[i]+1,start_idx:end_idx
+                        ] = dual_encoder_outputs["encoder_outputs"][
+                            i,intervened_dual_shape_index[i]:intervened_dual_shape_index[i]+1,start_idx:end_idx
+                        ]
+                        print(intervened_encoder_outputs.shape)
+                        start_idx = intervened_swap_attr[i]
+                        end_idx = (intervened_swap_attr[i]+1)*25 # this is a little hacky here.
+                        intervened_hidden[i,start_idx:end_idx] = hidden[i,start_idx:end_idx]
+                    hidden = model(
+                        command_hidden=intervened_hidden,
+                        tag="initialize_hidden"
+                    )
+                    encoded_image = model(
+                        situations_input=situation_batch,
+                        tag="situation_encode"
+                    )
+                    projected_keys_visual = model(
+                        encoded_situations=encoded_image,
+                        tag="projected_keys_visual"
+                    )
+                    projected_keys_textual = model(
+                        command_encoder_outputs=intervened_encoder_outputs,
+                        tag="projected_keys_textual"
+                    )
                 
                 # decoder which we do not touch at all!
                 cf_outputs = []
