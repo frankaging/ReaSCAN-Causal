@@ -456,6 +456,7 @@ class ReaSCANDataset(object):
         intervened_target_batch = []
         intervened_target_lengths_batch = []
         intervened_swap_attr = [] # 0, 1, 2 maps to size, color, shape
+        intervened_target_str = []
         for i in range(0, batch_size):
             if not novel_attribute:
                 # we put dummies
@@ -599,10 +600,7 @@ class ReaSCANDataset(object):
                     intervened_padded_target = torch.cat([
                         target_array,
                         torch.zeros(int(to_pad_target), dtype=torch.long)], dim=-1)
-                    print(dual_target_str_batch[i])
-                    print(target_str_batch[i])
-                    print(",".join(new_composites))
-                    print(swap_attr)
+                    intervened_target_str += [",".join(new_composites)]
                 else:
                     # we don't have a valid action sequence, we need to use some dummy data!
                     main_swap_index, dual_swap_index, main_shape_index, dual_shape_index = -1, -1, -1, -1
