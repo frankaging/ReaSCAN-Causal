@@ -617,39 +617,84 @@ def train(
                         command_encoder_outputs=encoder_outputs["encoder_outputs"],
                         tag="projected_keys_textual"
                     )
-                    cf_outputs = []
-                    cf_hidden = hidden
-                    for j in range(intervened_target_batch.shape[1]):
-                        cf_token=intervened_target_batch[:,j]
-                        (cf_output, cf_hidden) = model(
-                            lstm_input_tokens_sorted=cf_token,
-                            lstm_hidden=cf_hidden,
-                            lstm_projected_keys_textual=projected_keys_textual,
-                            lstm_commands_lengths=input_lengths_batch,
-                            lstm_projected_keys_visual=projected_keys_visual,
-                            tag="_lstm_step_fxn"
-                        )
-                        # record the output for loss calculation.
-                        cf_output = cf_output.unsqueeze(0)
-                        cf_outputs += [cf_output]
-                    cf_outputs = torch.cat(cf_outputs, dim=0)
-                    intervened_scores_batch = cf_outputs.transpose(0, 1) # [batch_size, max_target_seq_length, target_vocabulary_size]
-                    # Counterfactual loss
-                    intervened_scores_batch = F.log_softmax(intervened_scores_batch, dim=-1)
-                    intervened_scores_batch_to_eval = intervened_scores_batch.clone()
-                    intervened_target_batch_to_eval = intervened_target_batch.clone()
-                    
-                    cf_loss = model(
-                        loss_target_scores=intervened_scores_batch, 
-                        loss_target_batch=intervened_target_batch,
-                        tag="loss"
-                    )
-                    if use_cuda and n_gpu > 1:
-                        cf_loss = cf_loss.mean() # mean() to average on multi-gpu.
                 elif intervene_position == "hidden":
-                    pass
+                    commands_embedding = model(
+                        commands_input=input_batch, 
+                        tag="command_input_encode_embedding"
+                    )
+                    dual_commands_embedding = model(
+                        commands_input=dual_input_batch, 
+                        tag="command_input_encode_embedding"
+                    )
+                    hidden, encoder_outputs = model(
+                        commands_embedding=commands_embedding, 
+                        commands_lengths=input_lengths_batch,
+                        tag="command_input_encode_no_dict_with_embedding"
+                    )
+                    dual_hidden, dual_encoder_outputs = model(
+                        commands_embedding=dual_commands_embedding, 
+                        commands_lengths=input_lengths_batch,
+                        tag="command_input_encode_no_dict_with_embedding"
+                    )
+                    # intervene on lstm hidden.
+                    intervened_encoder_outputs = encoder_outputs["encoder_outputs"]
+                    for i in range(len(idx_selected)):
+                        assert intervened_main_swap_index[i] != -1
+                        intervened_encoder_outputs[
+                            i,intervened_main_swap_index[i]:intervened_main_swap_index[i]+1
+                        ] = dual_encoder_outputs["encoder_outputs"][
+                            i,intervened_dual_swap_index[i]:intervened_dual_swap_index[i]+1
+                        ]
+                    # intervene on init hidden as well.
+                    intervened_hidden = hidden
+                    print(intervened_hidden.shape)
+                    
+                    hidden = model(
+                        command_hidden=hidden,
+                        tag="initialize_hidden"
+                    )
+                    projected_keys_visual = model(
+                        encoded_situations=encoded_image,
+                        tag="projected_keys_visual"
+                    )
+                    projected_keys_textual = model(
+                        command_encoder_outputs=intervened_encoder_outputs,
+                        tag="projected_keys_textual"
+                    )
+                    
                 elif intervene_position == "last_hidden":
                     pass
+                
+                # decoder which we do not touch at all!
+                cf_outputs = []
+                cf_hidden = hidden
+                for j in range(intervened_target_batch.shape[1]):
+                    cf_token=intervened_target_batch[:,j]
+                    (cf_output, cf_hidden) = model(
+                        lstm_input_tokens_sorted=cf_token,
+                        lstm_hidden=cf_hidden,
+                        lstm_projected_keys_textual=projected_keys_textual,
+                        lstm_commands_lengths=input_lengths_batch,
+                        lstm_projected_keys_visual=projected_keys_visual,
+                        tag="_lstm_step_fxn"
+                    )
+                    # record the output for loss calculation.
+                    cf_output = cf_output.unsqueeze(0)
+                    cf_outputs += [cf_output]
+                cf_outputs = torch.cat(cf_outputs, dim=0)
+                intervened_scores_batch = cf_outputs.transpose(0, 1) # [batch_size, max_target_seq_length, target_vocabulary_size]
+                # Counterfactual loss
+                intervened_scores_batch = F.log_softmax(intervened_scores_batch, dim=-1)
+                intervened_scores_batch_to_eval = intervened_scores_batch.clone()
+                intervened_target_batch_to_eval = intervened_target_batch.clone()
+
+                cf_loss = model(
+                    loss_target_scores=intervened_scores_batch, 
+                    loss_target_batch=intervened_target_batch,
+                    tag="loss"
+                )
+                if use_cuda and n_gpu > 1:
+                    cf_loss = cf_loss.mean() # mean() to average on multi-gpu.
                 
             # LOSS COMBO
             loss = 0.0
