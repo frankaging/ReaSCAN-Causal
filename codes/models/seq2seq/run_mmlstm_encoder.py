@@ -650,11 +650,8 @@ def train(
                         start_idx = intervened_swap_attr[i]
                         end_idx = (intervened_swap_attr[i]+1)*intervene_dimension_size
                         intervened_hidden[i,start_idx:end_idx] = hidden[i,start_idx:end_idx]
-
-                    print(intervened_hidden.shape)
-                    
                     hidden = model(
-                        command_hidden=hidden,
+                        command_hidden=intervened_hidden,
                         tag="initialize_hidden"
                     )
                     encoded_image = model(
