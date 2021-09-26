@@ -540,6 +540,9 @@ def train(
                 task_output = F.log_softmax(task_output, dim=-1)
                 task_outputs += [task_output]
             target_scores = torch.stack(task_outputs, dim=1)
+            target_scores_to_eval = target_scores.clone()
+            target_batch_to_eval = target_batch.clone()
+            
             task_loss = model(
                 loss_target_scores=target_scores, 
                 loss_target_batch=target_batch,
@@ -633,6 +636,9 @@ def train(
                     intervened_scores_batch = cf_outputs.transpose(0, 1) # [batch_size, max_target_seq_length, target_vocabulary_size]
                     # Counterfactual loss
                     intervened_scores_batch = F.log_softmax(intervened_scores_batch, dim=-1)
+                    intervened_scores_batch_to_eval = intervened_scores_batch.clone()
+                    intervened_target_batch_to_eval = intervened_target_batch.clone()
+                    
                     cf_loss = model(
                         loss_target_scores=intervened_scores_batch, 
                         loss_target_batch=intervened_target_batch,
@@ -672,18 +678,18 @@ def train(
                 else:
                     auxiliary_accuracy_target = 0.
                 # main task evaluation
-                print(target_scores.shape)
-                print(target_batch.shape)
+                print(target_scores_to_eval.shape)
+                print(target_batch_to_eval.shape)
                 accuracy, exact_match = model(
-                    loss_target_scores=target_scores, 
-                    loss_target_batch=target_batch,
+                    loss_target_scores=target_scores_to_eval, 
+                    loss_target_batch=target_batch_to_eval,
                     tag="get_metrics"
                 )
                 # cf evaluation
                 if cf_loss:
                     cf_accuracy, cf_exact_match = model(
-                        loss_target_scores=intervened_scores_batch, 
-                        loss_target_batch=intervened_target_batch,
+                        loss_target_scores=intervened_scores_batch_to_eval, 
+                        loss_target_batch=intervened_target_batch_to_eval,
                         tag="get_metrics"
                     )
                 else:
