@@ -638,6 +638,8 @@ def train(
                     )
                     # intervene on lstm hidden.
                     intervened_encoder_outputs = encoder_outputs["encoder_outputs"]
+                    # intervene on init hidden as well.
+                    intervened_hidden = hidden
                     for i in range(len(idx_selected)):
                         assert intervened_main_swap_index[i] != -1
                         intervened_encoder_outputs[
@@ -645,8 +647,10 @@ def train(
                         ] = dual_encoder_outputs["encoder_outputs"][
                             i,intervened_dual_swap_index[i]:intervened_dual_swap_index[i]+1
                         ]
-                    # intervene on init hidden as well.
-                    intervened_hidden = hidden
+                        start_idx = intervened_swap_attr[i]
+                        end_idx = (intervened_swap_attr[i]+1)*intervene_dimension_size
+                        intervened_hidden[i,start_idx:end_idx] = hidden[i,start_idx:end_idx]
+
                     print(intervened_hidden.shape)
                     
                     hidden = model(
