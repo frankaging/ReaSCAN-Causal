@@ -653,6 +653,10 @@ def train(
                         command_hidden=hidden,
                         tag="initialize_hidden"
                     )
+                    encoded_image = model(
+                        situations_input=situation_batch,
+                        tag="situation_encode"
+                    )
                     projected_keys_visual = model(
                         encoded_situations=encoded_image,
                         tag="projected_keys_visual"
