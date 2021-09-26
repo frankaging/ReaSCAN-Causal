@@ -581,14 +581,18 @@ def train(
                         ] = dual_input_batch[
                             i,intervened_dual_swap_index[i]:intervened_dual_swap_index[i]+1
                         ]
-                    commands_embedding = model(
-                        commands_input=input_batch, 
+                    intervened_commands_embedding = model(
+                        commands_input=intervened_input_batch, 
                         tag="command_input_encode_embedding"
                     )
-                    dual_commands_embedding = model(
-                        commands_input=dual_input_batch, 
-                        tag="command_input_encode_embedding"
-                    )
+#                     commands_embedding = model(
+#                         commands_input=input_batch, 
+#                         tag="command_input_encode_embedding"
+#                     )
+#                     dual_commands_embedding = model(
+#                         commands_input=dual_input_batch, 
+#                         tag="command_input_encode_embedding"
+#                     )
                     encoded_image = model(
                         situations_input=situation_batch,
                         tag="situation_encode"
