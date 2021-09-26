@@ -573,6 +573,14 @@ def train(
                 intervened_swap_attr = intervened_swap_attr[idx_selected]
             
                 if intervene_position == "embedding":
+                    intervened_input_batch = input_batch
+                    for i in range(len(idx_selected)):
+                        assert intervened_main_swap_index[i] != -1
+                        intervened_input_batch[
+                            i,intervened_main_swap_index[i]:intervened_main_swap_index[i]+1
+                        ] = dual_input_batch[
+                            i,intervened_dual_swap_index[i]:intervened_dual_swap_index[i]+1
+                        ]
                     commands_embedding = model(
                         commands_input=input_batch, 
                         tag="command_input_encode_embedding"
@@ -581,14 +589,6 @@ def train(
                         commands_input=dual_input_batch, 
                         tag="command_input_encode_embedding"
                     )
-                    intervened_commands_embedding = commands_embedding
-                    for i in range(len(idx_selected)):
-                        assert intervened_main_swap_index[i] != -1
-                        intervened_commands_embedding[
-                            i,intervened_main_swap_index[i]:intervened_main_swap_index[i]+1
-                        ] = dual_commands_embedding[
-                            i,intervened_dual_swap_index[i]:intervened_dual_swap_index[i]+1
-                        ]
                     encoded_image = model(
                         situations_input=situation_batch,
                         tag="situation_encode"
