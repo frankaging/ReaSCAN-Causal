@@ -668,6 +668,8 @@ def train(
                 else:
                     auxiliary_accuracy_target = 0.
                 # main task evaluation
+                print(target_scores.shape)
+                print(target_batch.shape)
                 accuracy, exact_match = model(
                     loss_target_scores=target_scores, 
                     loss_target_batch=target_batch,
