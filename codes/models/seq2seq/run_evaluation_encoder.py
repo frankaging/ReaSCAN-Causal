@@ -19,6 +19,7 @@ import random
 import torch.nn.functional as F
 from tqdm import tqdm, trange
 
+from model import *
 from decode_abstract_models import *
 from seq2seq.ReaSCAN_dataset import *
 from seq2seq.helpers import *

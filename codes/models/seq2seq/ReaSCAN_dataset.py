@@ -511,15 +511,17 @@ class ReaSCANDataset(object):
                                 id_size_tuples.append((k, int(v["object"]["size"])))
                         else:
                             id_size_tuples.append((k, int(v["object"]["size"])))
-
-                if target_si != "":
+                if new_composites[0] != "":
                     # we need to ground size relatively?
-                    if len(id_size_tuples) == 2:
+                    size_set = set([])
+                    for ss in id_size_tuples:
+                        size_set.add(ss[1])
+                    if len(id_size_tuples) == 2 and len(size_set) == 2:
                         id_size_tuples = sorted(id_size_tuples, key=lambda x: x[1])
                         # only more than 2 we can have relative stuffs.
-                        if target_si == "big":
+                        if new_composites[0] == "big":
                             new_target_id = id_size_tuples[-1][0]
-                        elif target_si == "small":
+                        elif new_composites[0] == "small":
                             new_target_id = id_size_tuples[0][0]
                 else:
                     if len(id_size_tuples) == 1:
