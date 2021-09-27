@@ -43,7 +43,6 @@ def isnotebook():
 def predict(
     data_iterator, 
     model, 
-    hi_model,
     max_decoding_steps, 
     pad_idx, 
     sos_idx,
@@ -91,23 +90,6 @@ def predict(
         input_lengths = input_lengths.to(device)
         target_lengths = target_lengths.to(device)
 
-        high_hidden_states = hi_model(
-            agent_positions_batch=agent_positions.unsqueeze(dim=-1), 
-            target_positions_batch=target_positions.unsqueeze(dim=-1), 
-            tag="situation_encode"
-        )
-        high_actions = torch.zeros(
-            high_hidden_states.size(0), 1
-        ).long().to(device)
-
-        # get the intercepted dual hidden states.
-        for j in range(intervene_time):
-            high_hidden_states, _ = hi_model(
-                hmm_states=high_hidden_states, 
-                hmm_actions=high_actions, 
-                tag="_hmm_step_fxn"
-            )
-        true_target_positions = high_hidden_states+5
         # We need to chunk
         input_sequence = input_sequence[:,:input_max_seq_lens]
         target_sequence = target_sequence[:,:target_max_seq_lens]
@@ -119,12 +101,15 @@ def predict(
             situations_input=situation,
             tag="situation_encode"
         )
-        hidden, encoder_outputs = model(
+        commands_embedding = model(
             commands_input=input_sequence, 
-            commands_lengths=input_lengths,
-            tag="command_input_encode_no_dict"
+            tag="command_input_encode_embedding"
         )
-
+        hidden, encoder_outputs = model(
+            commands_embedding=commands_embedding, 
+            commands_lengths=input_lengths,
+            tag="command_input_encode_no_dict_with_embedding"
+        )
         # DECODER INIT
         hidden = model(
             command_hidden=hidden,
@@ -180,7 +165,6 @@ def predict(
 def evaluate(
     data_iterator,
     model, 
-    hi_model,
     max_decoding_steps, 
     pad_idx,
     sos_idx,
@@ -196,7 +180,7 @@ def evaluate(
     all_metrics_position_x = [] 
     all_metrics_position_y = []
     for input_sequence, output_sequence, target_sequence, aux_acc_target, metrics_position_x, metrics_position_y in predict(
-            data_iterator=data_iterator, model=model, hi_model=hi_model, max_decoding_steps=max_decoding_steps, pad_idx=pad_idx,
+            data_iterator=data_iterator, model=model, max_decoding_steps=max_decoding_steps, pad_idx=pad_idx,
             sos_idx=sos_idx, eos_idx=eos_idx, max_examples_to_evaluate=max_examples_to_evaluate, device=device,
             intervene_time=intervene_time, intervene_dimension_size=intervene_dimension_size,
     ):
@@ -415,18 +399,6 @@ def train(
     logger.info(f"MAX_DECODING_STEPS for Training: {train_max_decoding_steps}")
     logger.info(f"==== WARNING ====")
 
-    # create high level model for counterfactual training.
-    # WARNING: we are not using antra for high model.
-    # hi_model = get_counter_compgraph(
-    #     train_max_decoding_steps,
-    #     cache_results=False
-    # )
-    hi_model = HighLevelModel(
-        # None
-    )
-    hi_model.to(device)
-    logger.info("Finish loading both low and high models..")
-    
     logger.info("Training starts..")
     training_iteration = start_iteration
     cf_sample_per_batch_in_percentage = cf_sample_p
@@ -576,18 +548,22 @@ def train(
                 intervened_swap_attr = intervened_swap_attr[idx_selected]
             
                 if intervene_position == "embedding":
-                    intervened_input_batch = input_batch
-                    for i in range(len(idx_selected)):
-                        assert intervened_main_swap_index[i] != -1
-                        intervened_input_batch[
-                            i,intervened_main_swap_index[i]:intervened_main_swap_index[i]+1
-                        ] = dual_input_batch[
-                            i,intervened_dual_swap_index[i]:intervened_dual_swap_index[i]+1
-                        ]
-                    intervened_commands_embedding = model(
-                        commands_input=intervened_input_batch, 
+                    commands_embedding = model(
+                        commands_input=input_batch, 
                         tag="command_input_encode_embedding"
                     )
+                    dual_commands_embedding = model(
+                        commands_input=dual_input_batch, 
+                        tag="command_input_encode_embedding"
+                    )
+                    intervened_commands_embedding = commands_embedding
+                    for i in range(len(idx_selected)):
+                        assert intervened_main_swap_index[i] != -1
+                        intervened_commands_embedding[
+                            i,intervened_main_swap_index[i]:intervened_main_swap_index[i]+1
+                        ] = dual_commands_embedding[
+                            i,intervened_dual_swap_index[i]:intervened_dual_swap_index[i]+1
+                        ]
                     encoded_image = model(
                         situations_input=situation_batch,
                         tag="situation_encode"
@@ -819,7 +795,7 @@ def train(
                     model.eval()
                     logger.info("Evaluating..")
                     accuracy, exact_match, target_accuracy, eval_metrics_position_x, eval_metrics_position_y = evaluate(
-                        test_dataloader, model=model, hi_model=hi_model,
+                        test_dataloader, model=model,
                         max_decoding_steps=max_decoding_steps, pad_idx=test_set.target_vocabulary.pad_idx,
                         sos_idx=test_set.target_vocabulary.sos_idx,
                         eos_idx=test_set.target_vocabulary.eos_idx,
