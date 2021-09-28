@@ -51,7 +51,7 @@ python generate_ReaSCAN.py \
 --n_object_max 13 \
 --per_command_world_retry_max 500 \
 --per_command_world_target_count 1200 \
---output_dir ../../data-files/ReaSCAN-Causal-ICLR-Official-new-length/ \
+--output_dir ../../data-files/ReaSCAN-Causal-ICLR-Official-novel-length/ \
 --include_relation_distractor \
 --include_attribute_distractor \
 --include_isomorphism_distractor \
@@ -65,6 +65,10 @@ python generate_ReaSCAN.py \
 # this is because we only allow "walk" as our verb, and we don't allow
 # adverb in this case for simplicity.
 # --simple_command is for generating these commands.
+
+# after you generate the dataset, you need to use the splitter to
+# make sure you have testing sets splitted correctly.
+# ReaSCAN_splitter.ipynb
 
 
 #####
