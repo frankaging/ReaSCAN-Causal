@@ -319,7 +319,6 @@ def train(
                   target_pad_idx=training_set.target_vocabulary.pad_idx,
                   target_eos_idx=training_set.target_vocabulary.eos_idx,
                   target_position_size=target_position_size,
-                  intervene_dimension_size=25, # this is dummy.
                   **cfg)
     
     # gpu setups
