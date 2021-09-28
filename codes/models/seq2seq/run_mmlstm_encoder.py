@@ -514,33 +514,35 @@ def train(
                         end_idx = (auxiliary_attribute+1)*intervene_dimension_size # this is a little hacky here.
                         encoder_outputs = task_encoder_outputs["encoder_outputs"]
                         auxiliary_hidden += [encoder_outputs[i, intervened_main_shape_index[i], start_idx:end_idx]]
-                auxiliary_hidden = torch.stack(auxiliary_hidden, dim=0).to(device)
-                auxiliary_target = torch.stack(auxiliary_target, dim=0).to(device)
                 
-                if auxiliary_attribute == 0:
-                    cf_auxiliary_task_tag = "size"
-                elif auxiliary_attribute == 1:
-                    cf_auxiliary_task_tag = "color"
-                elif auxiliary_attribute == 2:
-                    cf_auxiliary_task_tag = "shape"
-                cf_target_attribute = model(
-                    auxiliary_hidden=auxiliary_hidden,
-                    cf_auxiliary_task_tag=cf_auxiliary_task_tag,
-                    tag="cf_auxiliary_task"
-                )
-                cf_target_attribute = F.log_softmax(cf_target_attribute, dim=-1)
-                cf_auxiliary_loss = model(
-                    loss_pred_target_auxiliary=cf_target_attribute,
-                    loss_true_target_auxiliary=auxiliary_target,
-                    tag="cf_auxiliary_task_loss"
-                )
-                if use_cuda and n_gpu > 1:
-                    cf_auxiliary_loss = cf_auxiliary_loss.mean() # mean() to average on multi-gpu.
-                metrics_attribute = model(
-                    loss_pred_target_auxiliary=cf_target_attribute,
-                    loss_true_target_auxiliary=auxiliary_target,
-                    tag="cf_auxiliary_task_metrics"
-                )
+                if len(auxiliary_target) > 0:
+                    auxiliary_hidden = torch.stack(auxiliary_hidden, dim=0).to(device)
+                    auxiliary_target = torch.stack(auxiliary_target, dim=0).to(device)
+
+                    if auxiliary_attribute == 0:
+                        cf_auxiliary_task_tag = "size"
+                    elif auxiliary_attribute == 1:
+                        cf_auxiliary_task_tag = "color"
+                    elif auxiliary_attribute == 2:
+                        cf_auxiliary_task_tag = "shape"
+                    cf_target_attribute = model(
+                        auxiliary_hidden=auxiliary_hidden,
+                        cf_auxiliary_task_tag=cf_auxiliary_task_tag,
+                        tag="cf_auxiliary_task"
+                    )
+                    cf_target_attribute = F.log_softmax(cf_target_attribute, dim=-1)
+                    cf_auxiliary_loss = model(
+                        loss_pred_target_auxiliary=cf_target_attribute,
+                        loss_true_target_auxiliary=auxiliary_target,
+                        tag="cf_auxiliary_task_loss"
+                    )
+                    if use_cuda and n_gpu > 1:
+                        cf_auxiliary_loss = cf_auxiliary_loss.mean() # mean() to average on multi-gpu.
+                    metrics_attribute = model(
+                        loss_pred_target_auxiliary=cf_target_attribute,
+                        loss_true_target_auxiliary=auxiliary_target,
+                        tag="cf_auxiliary_task_metrics"
+                    )
                 
             task_hidden = model(
                 command_hidden=task_hidden,
