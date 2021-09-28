@@ -179,6 +179,7 @@ def evaluate(
 
 def train(
     data_path: str, 
+    args,
     data_directory: str, 
     generate_vocabularies: bool, 
     input_vocab_path: str,   
@@ -213,10 +214,30 @@ def train(
     weight_target_loss: float, 
     attention_type: str, 
     k: int, 
+    # counterfactual training arguments
+    run_name: str,
+    cf_mode: str,
+    cf_sample_p: float,
+    checkpoint_save_every: int,
+    include_cf_loss: bool,
+    include_task_loss: bool,
+    cf_loss_weight: float,
     is_wandb: bool,
+    intervene_attribute: int,
+    intervene_time: int,
+    intervene_dimension_size: int,
+    include_cf_auxiliary_loss: bool,
+    intervene_method: str,
+    no_cuda: bool,
+    restrict_sampling: str,
     max_training_examples=None, 
-    seed=42, **kwargs
+    seed=42,
+    **kwargs
 ):
+    # we at least need to have one kind of loss.
+    logger.info(f"LOSS CONFIG: include_task_loss={include_task_loss}, "
+                f"include_cf_loss={include_cf_loss} with cf_loss_weight = {cf_loss_weight}...")
+    
     cfg = locals().copy()
 
     random.seed(seed)
@@ -236,8 +257,9 @@ def train(
     if is_wandb:
         logger.warning("Enabling wandb for tensorboard logging...")
         import wandb
+        
         run = wandb.init(
-            project="ReaSCAN-Causal", 
+            project="ReaSCAN-Causal-ICLR-Official", 
             entity="wuzhengx",
             name=run_name,
         )
