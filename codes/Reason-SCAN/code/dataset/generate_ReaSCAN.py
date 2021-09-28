@@ -399,6 +399,11 @@ def arg_parse():
     parser.add_argument('--output_dir', type=str, default="../../data-files/ReaSCAN-compositional_splits/",
                         help='Whether to resume for this file.')
 
+    parser.add_argument("--simple_command",
+                        default=False,
+                        action='store_true',
+                        help="Whether to only allow walk and non-adverb commands.")
+    
     parser.set_defaults(
         # Exp management:
         n_processes=1,
@@ -413,6 +418,7 @@ def arg_parse():
         resumed_from_file_path="",
         is_tensorboard=False,
         output_dir="../../data-files/ReaSCAN-compositional_splits/",
+        simple_command=False,
     )
     try:
         get_ipython().run_line_magic('matplotlib', 'inline')
@@ -717,22 +723,32 @@ if __name__ == "__main__":
             grammer_bindings = grammer.grounding_grammer_with_vocabulary(grammer_pattern, obj_pattern_map, rel_map)
             for obj_map in grammer_bindings:
                 if p1_exhaustive_verb_adverb:
-                    # some modification here from ReaSCAN repo!!!
-                    for adverb in vocabulary.get_adverbs() + [""]:
-                        for verb in vocabulary.get_transitive_verbs() + vocabulary.get_intransitive_verbs():
-                    # for adverb in [""]:
-                    #     for verb in ["walk"]:
-                            # here, we also sample the verb and adverb bindings!
-                            command_struct = {
-                                "obj_pattern_map" : obj_pattern_map,
-                                "rel_map" : rel_map,
-                                "obj_map" : obj_map,
-                                "grammer_pattern" : grammer_pattern,
-                                "adverb" : adverb,
-                                "verb" : verb,
-                            }
-                            command_structs += [command_struct]
-            
+                    if args.simple_command:
+                        for adverb in [""]:
+                            for verb in ["walk"]:
+                                command_struct = {
+                                    "obj_pattern_map" : obj_pattern_map,
+                                    "rel_map" : rel_map,
+                                    "obj_map" : obj_map,
+                                    "grammer_pattern" : grammer_pattern,
+                                    "adverb" : adverb,
+                                    "verb" : verb,
+                                }
+                                command_structs += [command_struct]
+                    else:
+                        for adverb in vocabulary.get_adverbs() + [""]:
+                            for verb in vocabulary.get_transitive_verbs() + vocabulary.get_intransitive_verbs():
+                                for verb in ["walk"]:
+                                    command_struct = {
+                                        "obj_pattern_map" : obj_pattern_map,
+                                        "rel_map" : rel_map,
+                                        "obj_map" : obj_map,
+                                        "grammer_pattern" : grammer_pattern,
+                                        "adverb" : adverb,
+                                        "verb" : verb,
+                                    }
+                                    command_structs += [command_struct]
+                                    
     # We only sample these command!
     """
     WARNING: beaware that not all command struct can

@@ -41,6 +41,31 @@ python generate_ReaSCAN.py \
 # We still provide scripts to split for novel direction, but consider
 # not to use it.
 
+# for new length tests, we need to slightly modify the dataset
+# generation script.
+python generate_ReaSCAN.py \
+--mode train \
+--n_command_struct -1 \
+--date 2021-09-28 \
+--grid_size 6 \
+--n_object_max 13 \
+--per_command_world_retry_max 500 \
+--per_command_world_target_count 1200 \
+--output_dir ../../data-files/ReaSCAN-Causal-ICLR-Official-new-length/ \
+--include_relation_distractor \
+--include_attribute_distractor \
+--include_isomorphism_distractor \
+--include_random_distractor \
+--full_relation_probability 1.0 \
+--command_pattern p1 \
+--save_interal 50 \
+--seed 42 \
+--simple_command
+# Note that we change --per_command_world_target_count now up to 1200
+# this is because we only allow "walk" as our verb, and we don't allow
+# adverb in this case for simplicity.
+# --simple_command is for generating these commands.
+
 
 #####
 #
