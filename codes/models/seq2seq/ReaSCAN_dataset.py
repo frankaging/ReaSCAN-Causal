@@ -335,7 +335,7 @@ class ReaSCANDataset(object):
         max_target_length = np.max(target_lengths)
         return max_target_length
 
-    def get_dual_dataset(self, novel_attribute=False):
+    def get_dual_dataset(self, novel_attribute=False, restrict_sampling=None):
         """
         Function for getting dual dataset for
         counterfactual training.
@@ -440,6 +440,49 @@ class ReaSCANDataset(object):
             return main_dataset, (situation_representation_batch, derivation_representation_batch)
             # the last two items are deprecated. we need to fix them to make them usable.
         
+        # addition thing:
+        # we will need the following data for probe for attributes!
+        batch_size = dual_input_batch.shape[0]
+        size_class = []
+        color_class = []
+        shape_class = []
+        for i in range(0, batch_size):
+            main_command_str = self.array_to_sentence(main_input_batch[i].tolist(), "input")
+            target_si, target_co, target_sh = target_str_batch[i].split(",")
+            if target_si == "small":
+                size_class += [0]
+            elif target_si == "big":
+                size_class += [1]
+            else:
+                assert target_si == ""
+                size_class += [-1]
+                
+            if target_co == "red":
+                color_class += [0]
+            elif target_co == "blue":
+                color_class += [1]
+            elif target_co == "green":
+                color_class += [2]
+            elif target_co == "yellow":
+                color_class += [3]
+            else:
+                assert target_co == ""
+                color_class += [-1]
+                
+            if target_sh == "circle":
+                shape_class += [0]
+            elif target_sh == "cylinder":
+                shape_class += [1]
+            elif target_sh == "square":
+                shape_class += [2]
+            else:
+                assert target_sh == ""
+                shape_class += [-1]
+        
+        size_class = torch.tensor(size_class, dtype=torch.long)
+        color_class = torch.tensor(color_class, dtype=torch.long)
+        shape_class = torch.tensor(shape_class, dtype=torch.long)
+        
         # here are the steps:
         # 1. find avaliable attributes to swap in both example.
         # 2. swap attribute, and get the updated action sequence, everything else stays the same.
@@ -448,7 +491,6 @@ class ReaSCANDataset(object):
         # slice swapping. Both should be provided I think.
         # I think we then need to return two things, noun swapping index, and atribute swapping index
         # those two could be the same, if we are swapping the noun.
-        batch_size = dual_input_batch.shape[0]
         intervened_main_swap_index = []
         intervened_dual_swap_index = []
         intervened_main_shape_index = []
@@ -473,7 +515,20 @@ class ReaSCANDataset(object):
             main_command_str = self.array_to_sentence(main_input_batch[i].tolist(), "input")
             dual_command_str = self.array_to_sentence(dual_input_batch[i].tolist(), "input")
             target_si, target_co, target_sh = target_str_batch[i].split(",")
+            if target_si != "":
+                assert target_si in main_command_str
+            if target_co != "":
+                assert target_co in main_command_str
+            if target_sh != "":
+                assert target_sh in main_command_str
             dual_target_si, dual_target_co, dual_target_sh = dual_target_str_batch[i].split(",")
+            if dual_target_si != "":
+                assert dual_target_si in dual_command_str
+            if dual_target_co != "":
+                assert dual_target_co in dual_command_str
+            if dual_target_sh != "":
+                assert dual_target_sh in dual_command_str
+                
             potential_swap_attr = [""]
             if target_si != "" and dual_target_si != "":
                 potential_swap_attr += ["size"]
@@ -502,31 +557,44 @@ class ReaSCANDataset(object):
                 intervened_swap_attr += [-1]
             
             new_target_id = -1
-            if swap_attr != "":
-                id_size_tuples = []
-                for k, v in situation_representation_batch[i]["placed_objects"].items():
-                    if v["object"]["shape"] == new_composites[2]:
-                        if new_composites[1] != "":
-                            if v["object"]["color"] == new_composites[1]:
+            restrict_skipping = False
+            if restrict_sampling is not None:
+                # we will need to restrict the samples.
+                new_composites_str = ",".join(new_composites)
+                if "yellow,square" in new_composites_str or \
+                    "small,cylinder" in new_composites_str or \
+                    "small,red,cylinder" in new_composites_str or \
+                    "small,blue,cylinder" in new_composites_str or \
+                    "small,yellow,cylinder" in new_composites_str or \
+                    "small,green,cylinder" in new_composites_str:
+                    restrict_skipping = True
+            if restrict_skipping == False:
+                if swap_attr != "":
+                    id_size_tuples = []
+                    for k, v in situation_representation_batch[i]["placed_objects"].items():
+                        if v["object"]["shape"] == new_composites[2]:
+                            if new_composites[1] != "":
+                                if v["object"]["color"] == new_composites[1]:
+                                    id_size_tuples.append((k, int(v["object"]["size"])))
+                            else:
                                 id_size_tuples.append((k, int(v["object"]["size"])))
-                        else:
-                            id_size_tuples.append((k, int(v["object"]["size"])))
-                if new_composites[0] != "":
-                    # we need to ground size relatively?
-                    size_set = set([])
-                    for ss in id_size_tuples:
-                        size_set.add(ss[1])
-                    if len(id_size_tuples) == 2 and len(size_set) == 2:
-                        id_size_tuples = sorted(id_size_tuples, key=lambda x: x[1])
-                        # only more than 2 we can have relative stuffs.
-                        if new_composites[0] == "big":
-                            new_target_id = id_size_tuples[-1][0]
-                        elif new_composites[0] == "small":
+                    if new_composites[0] != "":
+                        # we need to ground size relatively?
+                        size_set = set([])
+                        for ss in id_size_tuples:
+                            size_set.add(ss[1])
+                        if len(id_size_tuples) == 2 and len(size_set) == 2:
+                            id_size_tuples = sorted(id_size_tuples, key=lambda x: x[1])
+                            # only more than 2 we can have relative stuffs.
+                            if new_composites[0] == "big":
+                                new_target_id = id_size_tuples[-1][0]
+                            elif new_composites[0] == "small":
+                                new_target_id = id_size_tuples[0][0]
+                    else:
+                        if len(id_size_tuples) == 1:
                             new_target_id = id_size_tuples[0][0]
-                else:
-                    if len(id_size_tuples) == 1:
-                        new_target_id = id_size_tuples[0][0]
-            
+            else:
+                assert new_target_id == -1
             if new_target_id == -1:
                 # we don't have a new target, we need to use some dummy data!
                 main_swap_index, dual_swap_index, main_shape_index, dual_shape_index = -1, -1, -1, -1
@@ -636,7 +704,9 @@ class ReaSCANDataset(object):
             # intervened dataset for novel attribute
             intervened_main_swap_index, intervened_dual_swap_index, intervened_main_shape_index, 
             intervened_dual_shape_index, intervened_target_batch, intervened_swap_attr, 
-            intervened_target_lengths_batch
+            intervened_target_lengths_batch,
+            # cls
+            size_class, color_class, shape_class
         )  
         # with non-tensorized outputs
         return main_dataset, (situation_representation_batch, derivation_representation_batch)

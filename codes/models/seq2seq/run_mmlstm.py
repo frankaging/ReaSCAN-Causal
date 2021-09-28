@@ -698,25 +698,25 @@ def train(
                             y_s_idx = intervene_dimension_size
                             y_e_idx = 2*intervene_dimension_size
                             cf_target_positions_x = model(
-                                position_hidden=dual_hidden[0][:,:,x_s_idx:y_s_idx].squeeze(dim=1),
+                                auxiliary_hidden=dual_hidden[0][:,:,x_s_idx:y_s_idx].squeeze(dim=1),
                                 cf_auxiliary_task_tag="x",
                                 tag="cf_auxiliary_task"
                             )
                             cf_target_positions_x = F.log_softmax(cf_target_positions_x, dim=-1)
                             cf_target_positions_y = model(
-                                position_hidden=dual_hidden[0][:,:,y_s_idx:y_e_idx].squeeze(dim=1),
+                                auxiliary_hidden=dual_hidden[0][:,:,y_s_idx:y_e_idx].squeeze(dim=1),
                                 cf_auxiliary_task_tag="x",
                                 tag="cf_auxiliary_task"
                             )
                             cf_target_positions_y = F.log_softmax(cf_target_positions_y, dim=-1)
                             loss_position_x = model(
-                                loss_pred_target_positions=cf_target_positions_x,
-                                loss_true_target_positions=true_target_positions[:,0],
+                                loss_pred_target_auxiliary=cf_target_positions_x,
+                                loss_true_target_auxiliary=true_target_positions[:,0],
                                 tag="cf_auxiliary_task_loss"
                             )
                             loss_position_y = model(
-                                loss_pred_target_positions=cf_target_positions_y,
-                                loss_true_target_positions=true_target_positions[:,1],
+                                loss_pred_target_auxiliary=cf_target_positions_y,
+                                loss_true_target_auxiliary=true_target_positions[:,1],
                                 tag="cf_auxiliary_task_loss"
                             )
                             cf_position_loss = loss_position_x + loss_position_y
@@ -724,13 +724,13 @@ def train(
                                 cf_position_loss = cf_position_loss.mean() # mean() to average on multi-gpu.
                             # some metrics
                             metrics_position_x = model(
-                                loss_pred_target_positions=cf_target_positions_x,
-                                loss_true_target_positions=true_target_positions[:,0],
+                                loss_pred_target_auxiliary=cf_target_positions_x,
+                                loss_true_target_auxiliary=true_target_positions[:,0],
                                 tag="cf_auxiliary_task_metrics"
                             )
                             metrics_position_y = model(
-                                loss_pred_target_positions=cf_target_positions_y,
-                                loss_true_target_positions=true_target_positions[:,1],
+                                loss_pred_target_auxiliary=cf_target_positions_y,
+                                loss_true_target_auxiliary=true_target_positions[:,1],
                                 tag="cf_auxiliary_task_metrics"
                             )
                             

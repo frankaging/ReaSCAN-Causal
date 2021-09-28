@@ -93,6 +93,10 @@ class Model(nn.Module):
         # x, y for the target w.r.t. the agent.
         self.target_position_decoder_x = nn.Linear(intervene_dimension_size, target_position_size)
         self.target_position_decoder_y = nn.Linear(intervene_dimension_size, target_position_size)
+        
+        self.size_decoder = nn.Linear(intervene_dimension_size, 2)
+        self.color_decoder = nn.Linear(intervene_dimension_size, 4)
+        self.shape_decoder = nn.Linear(intervene_dimension_size, 3)
             
         self.target_eos_idx = target_eos_idx
         self.target_pad_idx = target_pad_idx
@@ -237,10 +241,10 @@ class Model(nn.Module):
                 # loss
                 loss_target_scores=None,
                 loss_target_batch=None,
-                # position related hidden states
-                position_hidden=None,
-                loss_pred_target_positions=None,
-                loss_true_target_positions=None,
+                # auxiliary related hidden states
+                auxiliary_hidden=None,
+                loss_pred_target_auxiliary=None,
+                loss_true_target_auxiliary=None,
                 # others
                 is_best=None,
                 accuracy=None,
@@ -434,18 +438,24 @@ class Model(nn.Module):
             )
         elif tag == "cf_auxiliary_task":
             assert cf_auxiliary_task_tag != None
-            assert position_hidden != None
+            assert auxiliary_hidden != None
             if cf_auxiliary_task_tag == "x":
-                position = self.target_position_decoder_x(position_hidden)
+                auxiliary_pred = self.target_position_decoder_x(auxiliary_hidden)
             elif cf_auxiliary_task_tag == "y":
-                position = self.target_position_decoder_y(position_hidden)
+                auxiliary_pred = self.target_position_decoder_y(auxiliary_hidden)
+            elif cf_auxiliary_task_tag == "size":
+                auxiliary_pred = self.size_decoder(auxiliary_hidden)
+            elif cf_auxiliary_task_tag == "color":
+                auxiliary_pred = self.color_decoder(auxiliary_hidden)
+            elif cf_auxiliary_task_tag == "shape":
+                auxiliary_pred = self.shape_decoder(auxiliary_hidden)
             else:
                 assert False
-            return position
+            return auxiliary_pred
         elif tag == "cf_auxiliary_task_loss":
-            return self.get_cf_auxiliary_loss(loss_pred_target_positions, loss_true_target_positions)
+            return self.get_cf_auxiliary_loss(loss_pred_target_auxiliary, loss_true_target_auxiliary)
         elif tag == "cf_auxiliary_task_metrics":
-            return self.get_cf_auxiliary_metrics(loss_pred_target_positions, loss_true_target_positions)
+            return self.get_cf_auxiliary_metrics(loss_pred_target_auxiliary, loss_true_target_auxiliary)
         else:
             encoder_output = self.encode_input(commands_input=commands_input, commands_lengths=commands_lengths,
                                                situations_input=situations_input)

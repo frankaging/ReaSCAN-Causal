@@ -77,7 +77,7 @@ def predict(
         
         # derivation_spec
         # situation_spec
-        input_sequence, target_sequence, situation,         agent_positions, target_positions,         input_lengths, target_lengths,         dual_input_sequence, dual_target_sequence, dual_situation,         dual_agent_positions, dual_target_positions,         dual_input_lengths, dual_target_lengths,         intervened_main_swap_index, intervened_dual_swap_index,         intervened_main_shape_index,intervened_dual_shape_index,         intervened_target_batch, intervened_swap_attr,         intervened_target_lengths_batch = batch
+        input_sequence, target_sequence, situation,         agent_positions, target_positions,         input_lengths, target_lengths,         dual_input_sequence, dual_target_sequence, dual_situation,         dual_agent_positions, dual_target_positions,         dual_input_lengths, dual_target_lengths,         intervened_main_swap_index, intervened_dual_swap_index,         intervened_main_shape_index,intervened_dual_shape_index,         intervened_target_batch, intervened_swap_attr,         intervened_target_lengths_batch, size_class, color_class, shape_class = batch
         
         input_max_seq_lens = max(input_lengths)[0]
         target_max_seq_lens = max(target_lengths)[0]
@@ -291,7 +291,7 @@ def train(
         logger.warning("Enabling wandb for tensorboard logging...")
         import wandb
         run = wandb.init(
-            project="ReaSCAN-Causal", 
+            project="ReaSCAN-Causal-ICLR-Official", 
             entity="wuzhengx",
             name=run_name,
         )
@@ -387,7 +387,7 @@ def train(
         logger.info("Loaded checkpoint '{}' (iter {})".format(resume_from_file, start_iteration))
     
     # Loading dataset and preprocessing a bit.
-    train_data, _ = training_set.get_dual_dataset(novel_attribute=True)
+    train_data, _ = training_set.get_dual_dataset(novel_attribute=True, restrict_sampling=restrict_sampling)
     train_sampler = RandomSampler(train_data)
     train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.training_batch_size)
     test_data, _ = test_set.get_dual_dataset(novel_attribute=True)
@@ -427,7 +427,7 @@ def train(
         # Shuffle the dataset and loop over it.
         for step, batch in enumerate(train_dataloader):
             # main batch
-            input_batch, target_batch, situation_batch,                 agent_positions_batch, target_positions_batch,                 input_lengths_batch, target_lengths_batch,                 dual_input_batch, dual_target_batch, dual_situation_batch,                 dual_agent_positions_batch, dual_target_positions_batch,                 dual_input_lengths_batch, dual_target_lengths_batch,                 intervened_main_swap_index, intervened_dual_swap_index,                 intervened_main_shape_index,intervened_dual_shape_index,                 intervened_target_batch, intervened_swap_attr,                 intervened_target_lengths_batch = batch
+            input_batch, target_batch, situation_batch,                 agent_positions_batch, target_positions_batch,                 input_lengths_batch, target_lengths_batch,                 dual_input_batch, dual_target_batch, dual_situation_batch,                 dual_agent_positions_batch, dual_target_positions_batch,                 dual_input_lengths_batch, dual_target_lengths_batch,                 intervened_main_swap_index, intervened_dual_swap_index,                 intervened_main_shape_index,intervened_dual_shape_index,                 intervened_target_batch, intervened_swap_attr,                 intervened_target_lengths_batch, size_class, color_class, shape_class = batch
 
             is_best = False
             model.train()
@@ -459,6 +459,9 @@ def train(
             intervened_target_batch = intervened_target_batch.to(device)
             intervened_swap_attr = intervened_swap_attr.to(device)
             intervened_target_lengths_batch = intervened_target_lengths_batch.to(device)
+            size_class = size_class.to(device)
+            color_class = color_class.to(device)
+            shape_class = shape_class.to(device)
             
             loss = None
             task_loss = None
@@ -466,6 +469,13 @@ def train(
             cf_auxiliary_loss = None
 
             batch_size = input_batch.size(0)
+            auxiliary_attribute = random.choice([0,1,2])
+            if auxiliary_attribute == 0:
+                auxiliary_attribute_str = "size"
+            elif auxiliary_attribute == 1:
+                auxiliary_attribute_str = "color"
+            elif auxiliary_attribute == 2:
+                auxiliary_attribute_str = "shape"
             
             '''
             We calculate this loss using the pytorch module, 
@@ -486,6 +496,52 @@ def train(
                 commands_lengths=input_lengths_batch,
                 tag="command_input_encode_no_dict_with_embedding"
             )
+            if include_cf_auxiliary_loss:
+                # here, we can directly calculate axu loss!
+                auxiliary_hidden = []
+                auxiliary_target = []
+                
+                for i in range(batch_size):
+                    if auxiliary_attribute == 0:
+                        attribute_class = size_class[i]
+                    elif auxiliary_attribute == 1:
+                        attribute_class = color_class[i]
+                    elif auxiliary_attribute == 2:
+                        attribute_class = shape_class[i]
+                    if attribute_class != -1:
+                        auxiliary_target += [attribute_class]
+                        start_idx = auxiliary_attribute*intervene_dimension_size
+                        end_idx = (auxiliary_attribute+1)*intervene_dimension_size # this is a little hacky here.
+                        encoder_outputs = task_encoder_outputs["encoder_outputs"]
+                        auxiliary_hidden += [encoder_outputs[i, intervened_main_shape_index[i], start_idx:end_idx]]
+                auxiliary_hidden = torch.stack(auxiliary_hidden, dim=0).to(device)
+                auxiliary_target = torch.stack(auxiliary_target, dim=0).to(device)
+                
+                if auxiliary_attribute == 0:
+                    cf_auxiliary_task_tag = "size"
+                elif auxiliary_attribute == 1:
+                    cf_auxiliary_task_tag = "color"
+                elif auxiliary_attribute == 2:
+                    cf_auxiliary_task_tag = "shape"
+                cf_target_attribute = model(
+                    auxiliary_hidden=auxiliary_hidden,
+                    cf_auxiliary_task_tag=cf_auxiliary_task_tag,
+                    tag="cf_auxiliary_task"
+                )
+                cf_target_attribute = F.log_softmax(cf_target_attribute, dim=-1)
+                cf_auxiliary_loss = model(
+                    loss_pred_target_auxiliary=cf_target_attribute,
+                    loss_true_target_auxiliary=auxiliary_target,
+                    tag="cf_auxiliary_task_loss"
+                )
+                if use_cuda and n_gpu > 1:
+                    cf_auxiliary_loss = cf_auxiliary_loss.mean() # mean() to average on multi-gpu.
+                metrics_attribute = model(
+                    loss_pred_target_auxiliary=cf_target_attribute,
+                    loss_true_target_auxiliary=auxiliary_target,
+                    tag="cf_auxiliary_task_metrics"
+                )
+                
             task_hidden = model(
                 command_hidden=task_hidden,
                 tag="initialize_hidden"
@@ -615,7 +671,7 @@ def train(
                         ] = dual_encoder_outputs["encoder_outputs"][
                             i,intervened_dual_swap_index[i]:intervened_dual_swap_index[i]+1
                         ]
-                        start_idx = intervened_swap_attr[i]
+                        start_idx = intervened_swap_attr[i]*intervene_dimension_size
                         end_idx = (intervened_swap_attr[i]+1)*intervene_dimension_size
                         intervened_hidden[i,start_idx:end_idx] = hidden[i,start_idx:end_idx]
                     hidden = model(
@@ -659,15 +715,13 @@ def train(
                     intervened_hidden = hidden
                     for i in range(len(idx_selected)):
                         assert intervened_main_swap_index[i] != -1
-                        start_idx = intervened_swap_attr[i]
-                        end_idx = (intervened_swap_attr[i]+1)*intervene_dimension_size # this is a little hacky here.
+                        start_idx = intervened_swap_attr[i]*intervene_dimension_size
+                        end_idx = (intervened_swap_attr[i]+1)*intervene_dimension_size
                         intervened_encoder_outputs[
                             i,intervened_main_shape_index[i]:intervened_main_shape_index[i]+1,start_idx:end_idx
                         ] = dual_encoder_outputs["encoder_outputs"][
                             i,intervened_dual_shape_index[i]:intervened_dual_shape_index[i]+1,start_idx:end_idx
                         ]
-                        start_idx = intervened_swap_attr[i]
-                        end_idx = (intervened_swap_attr[i]+1)*intervene_dimension_size
                         intervened_hidden[i,start_idx:end_idx] = hidden[i,start_idx:end_idx]
                     hidden = model(
                         command_hidden=intervened_hidden,
@@ -721,10 +775,10 @@ def train(
             loss = 0.0
             if include_task_loss:
                 loss += task_loss
-            if include_cf_loss:
+            if include_cf_loss and cf_loss:
                 loss += cf_loss*cf_loss_weight 
-            if include_cf_auxiliary_loss:
-                loss += cf_position_loss*cf_loss_weight
+            if include_cf_auxiliary_loss and cf_auxiliary_loss:
+                loss += cf_auxiliary_loss*cf_loss_weight
                 
             # Backward pass and update model parameters.
             loss.backward()
@@ -760,14 +814,18 @@ def train(
                     cf_loss, cf_accuracy, cf_exact_match = 0.0, 0.0, 0.0
                 
                 if not include_cf_auxiliary_loss:
-                    metrics_position_x, metrics_position_y = 0.0, 0.0
+                    metrics_attribute = 0.0
+                    auxiliary_attribute_str = "null"
+                    cf_auxiliary_loss = 0.0
                     
                 learning_rate = scheduler.get_lr()[0]
                 logger.info("Iteration %08d, task loss %8.4f, cf loss %8.4f, accuracy %5.2f, exact match %5.2f, "
                             "cf count %03d, cf accuracy %5.2f, cf exact match %5.2f, "
-                            "learning_rate %.5f" % (
+                            "learning_rate %.5f, auxiliary attribute %s, auxiliary loss %8.4f, "
+                            "auxiliary accuracy %5.2f" % (
                                 training_iteration, task_loss_to_write, cf_loss, accuracy, exact_match,
-                                len(idx_selected), cf_accuracy, cf_exact_match, learning_rate,
+                                len(idx_selected), cf_accuracy, cf_exact_match, learning_rate, 
+                                auxiliary_attribute_str, cf_auxiliary_loss, metrics_attribute
                             ))
                 # logging to wandb.
                 if is_wandb:
@@ -781,6 +839,12 @@ def train(
                         wandb.log({'train/counterfactual count': len(idx_selected)})
                         wandb.log({'train/counterfactual_accuracy': cf_accuracy})
                         wandb.log({'train/counterfactual_exact_match': cf_exact_match})
+                    if cf_auxiliary_loss and auxiliary_attribute_str == "size":
+                        wandb.log({'train/size_probe': cf_auxiliary_loss})
+                    elif cf_auxiliary_loss and auxiliary_attribute_str == "color":
+                        wandb.log({'train/color_probe': cf_auxiliary_loss})
+                    elif cf_auxiliary_loss and auxiliary_attribute_str == "shape":
+                        wandb.log({'train/shape_probe': cf_auxiliary_loss})
                     wandb.log({'train/learning_rate': learning_rate})
             # Evaluate on test set.
             """
