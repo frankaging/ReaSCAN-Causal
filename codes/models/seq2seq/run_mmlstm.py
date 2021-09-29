@@ -261,8 +261,10 @@ def train(
     if is_wandb:
         logger.warning("Enabling wandb for tensorboard logging...")
         import wandb
+        
+        
         run = wandb.init(
-            project="ReaSCAN-Causal", 
+            project="ReaSCAN-Causal-ICLR-Official", 
             entity="wuzhengx",
             name=run_name,
         )
