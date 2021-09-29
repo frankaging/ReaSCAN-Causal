@@ -554,6 +554,7 @@ class ReaSCANDataset(object):
                 new_composites = [target_si, target_co, dual_target_sh]
                 intervened_swap_attr += [2]
             else:
+                new_composites = ["","",""]
                 intervened_swap_attr += [-1]
             
             new_target_id = -1
