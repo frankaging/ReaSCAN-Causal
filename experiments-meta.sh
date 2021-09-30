@@ -10,6 +10,7 @@ jupyter nbconvert --to python run_seq2seq.ipynb
 jupyter nbconvert --to python run_mmlstm.ipynb
 jupyter nbconvert --to python run_mmlstm_encoder.ipynb
 jupyter nbconvert --to python run_evaluation.ipynb
+jupyter nbconvert --to python run_evaluation_encoder.ipynb
 jupyter nbconvert --to python generate_ReaSCAN.ipynb
 
 
