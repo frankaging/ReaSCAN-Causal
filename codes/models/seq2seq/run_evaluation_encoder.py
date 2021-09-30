@@ -267,13 +267,6 @@ def counterfactual_predict(
         min_len = min(target_max_seq_lens, dual_target_max_seq_lens)
         
         batch_size = input_batch.size(0)
-        auxiliary_attribute = random.choice([0,1,2])
-        if auxiliary_attribute == 0:
-            auxiliary_attribute_str = "size"
-        elif auxiliary_attribute == 1:
-            auxiliary_attribute_str = "color"
-        elif auxiliary_attribute == 2:
-            auxiliary_attribute_str = "shape"
         # calculate cf loss.
         # just like other cf, we need to first filter out some examples.
         idx_selected = []
@@ -376,7 +369,7 @@ def counterfactual_predict(
             if output_sequence[-1] == eos_idx:
                 output_sequence.pop()
         
-            yield input_batch, dual_input_batch, auxiliary_attribute,                 output_sequence, intervened_target_batch, target_batch, dual_target_batch, 0.0
+            yield input_batch, dual_input_batch,                 output_sequence, intervened_target_batch, target_batch, dual_target_batch, 0.0
         
 
 
@@ -465,7 +458,7 @@ def predict_and_save(
                 logger.info(" Starting our counterfactual analysis ... ")
                 exact_match_count = 0
                 example_count = 0
-                for input_sequence, dual_input_sequence, intervene_attribute,                     output_sequence, target_sequence, original_target_sequence, original_dual_target_str_sequence,                     aux_acc_target in counterfactual_predict(
+                for input_sequence, dual_input_sequence,                     output_sequence, target_sequence, original_target_sequence, original_dual_target_str_sequence,                     aux_acc_target in counterfactual_predict(
                         data_iterator=data_iterator, model=model, 
                         hi_model=hi_model,
                         max_decoding_steps=max_decoding_steps, 
@@ -495,7 +488,6 @@ def predict_and_save(
                         exact_match_count += 1
                     output.append({"input": input_str_sequence, 
                                    "dual_input": dual_input_str_sequence,
-                                   "intervene_attribute": intervene_attribute,
                                    "prediction": output_str_sequence,
                                    "target": target_str_sequence,
                                    "main_target": original_target_str_sequence,
