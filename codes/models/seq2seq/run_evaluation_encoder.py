@@ -347,9 +347,10 @@ def counterfactual_predict(
 
             # decoder which we do not touch at all!
             output_sequence = []
+            cf_token = torch.tensor([sos_idx], dtype=torch.long, device=device)
             cf_hidden = hidden
+            print(intervened_target_batch.shape)
             for j in range(intervened_target_batch.shape[1]):
-                cf_token=intervened_target_batch[:,j]
                 (cf_output, cf_hidden) = model(
                     lstm_input_tokens_sorted=cf_token,
                     lstm_hidden=cf_hidden,
@@ -400,7 +401,11 @@ def predict_and_save(
     cfg = locals().copy()
 
     # read-in datasets
-    test_data, _ = dataset.get_dual_dataset(novel_attribute=True, restrict_sampling=cfg["kwargs"]["restrict_sampling"])
+    if cfg["kwargs"]["restrict_sampling"] == "none":
+        restrict_sampling = None
+    else:
+        restrict_sampling = cfg["kwargs"]["restrict_sampling"]
+    test_data, _ = dataset.get_dual_dataset(novel_attribute=True, restrict_sampling=restrict_sampling)
     data_iterator = DataLoader(test_data, batch_size=1, shuffle=False)
     eval_max_decoding_steps = max_decoding_steps
     with open(output_file_path, mode='w') as outfile:
