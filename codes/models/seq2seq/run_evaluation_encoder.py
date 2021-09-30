@@ -349,7 +349,6 @@ def counterfactual_predict(
             output_sequence = []
             cf_token = torch.tensor([sos_idx], dtype=torch.long, device=device)
             cf_hidden = hidden
-            print(intervened_target_batch.shape)
             for j in range(intervened_target_batch.shape[1]):
                 (cf_output, cf_hidden) = model(
                     lstm_input_tokens_sorted=cf_token,
@@ -369,8 +368,7 @@ def counterfactual_predict(
 
             if output_sequence[-1] == eos_idx:
                 output_sequence.pop()
-        
-            yield input_batch, dual_input_batch,                 output_sequence, intervened_target_batch, target_batch, dual_target_batch, 0.0
+            yield input_batch, dual_input_batch,                 output_sequence, intervened_target_batch[:,:intervened_target_lengths_batch[0]], target_batch, dual_target_batch, 0.0
         
 
 
