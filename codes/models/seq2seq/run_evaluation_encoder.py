@@ -177,6 +177,7 @@ def counterfactual_predict(
     intervene_attribute=-1,
     intervene_time=-1,
     intervene_dimension_size=25,
+    intervene_position="last_hidden",
 ) -> torch.Tensor:
     """
     Loop over all data in data_iterator and predict until <EOS> token is reached.
