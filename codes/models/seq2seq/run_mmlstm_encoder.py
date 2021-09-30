@@ -290,6 +290,7 @@ def train(
     if is_wandb:
         logger.warning("Enabling wandb for tensorboard logging...")
         import wandb
+
         run = wandb.init(
             project="ReaSCAN-Causal-ICLR-Official", 
             entity="wuzhengx",
@@ -387,6 +388,10 @@ def train(
         logger.info("Loaded checkpoint '{}' (iter {})".format(resume_from_file, start_iteration))
     
     # Loading dataset and preprocessing a bit.
+    # read-in datasets
+    if restrict_sampling == "none":
+        logger.info("WARNING: Not filtering any data points!")
+        restrict_sampling = None
     train_data, _ = training_set.get_dual_dataset(novel_attribute=True, restrict_sampling=restrict_sampling)
     train_sampler = RandomSampler(train_data)
     train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.training_batch_size)
