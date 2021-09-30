@@ -593,102 +593,107 @@ def predict_and_save(
         output = []
         with torch.no_grad():
             
-            #################
-            #
-            # Task-based
-            #
-            #################
-            exact_match_count = 0
-            example_count = 0
-            for input_sequence, output_sequence, target_sequence, aux_acc_target, pred_pos_x_acc,                 pred_pos_y_acc, pred_pos_x, pred_pos_y, true_pos_x, true_pos_y in predict(
-                    data_iterator=data_iterator, model=model, hi_model=hi_model, 
-                    max_decoding_steps=max_decoding_steps, 
-                    pad_idx=dataset.target_vocabulary.pad_idx,
-                    sos_idx=dataset.target_vocabulary.sos_idx, 
-                    eos_idx=dataset.target_vocabulary.eos_idx, 
-                    max_examples_to_evaluate=max_testing_examples, 
-                    device=device,
-                    intervene_time=cfg["kwargs"]["intervene_time"],
-                    intervene_dimension_size=cfg["kwargs"]["intervene_dimension_size"],
-            ):
-                example_count += 1
-                accuracy = sequence_accuracy(output_sequence, target_sequence[0].tolist()[1:-1])
-                input_str_sequence = dataset.array_to_sentence(input_sequence[0].tolist(), vocabulary="input")
-                input_str_sequence = input_str_sequence[1:-1]  # Get rid of <SOS> and <EOS>
-                target_str_sequence = dataset.array_to_sentence(target_sequence[0].tolist(), vocabulary="target")
-                target_str_sequence = target_str_sequence[1:-1]  # Get rid of <SOS> and <EOS>
-                output_str_sequence = dataset.array_to_sentence(output_sequence, vocabulary="target")
-                if accuracy == 100:
-                    exact_match_count += 1
-                output.append({"input": input_str_sequence, "prediction": output_str_sequence,
-                               "target": target_str_sequence,
-                               "accuracy": accuracy,
-                               "exact_match": True if accuracy == 100 else False,
-                               "pred_pos_x_acc": pred_pos_x_acc.tolist(), 
-                               "pred_pos_y_acc": pred_pos_y_acc.tolist(), 
-                               "pred_pos_exact_match": True if pred_pos_x_acc ==100 and pred_pos_y_acc == 100 else False,
-                               "pred_pos": (pred_pos_x.tolist()[0]-5, pred_pos_y.tolist()[0]-5),
-                               "true_pos": (true_pos_x.tolist()[0]-5, true_pos_y.tolist()[0]-5),
-                              })      
-            exact_match = (exact_match_count/example_count)*100.0
-            logger.info(" Task Evaluation Exact Match: %5.2f " % (exact_match))
-            if not cfg["kwargs"]["counterfactual_evaluate"]:
-                logger.info("Wrote predictions for {} examples.".format(example_count))
-                json.dump(output, outfile, indent=4)
-                return output_file_path
-
-            #################
-            #
-            # Counterfactual
-            #
-            #################
-            logger.info(" Starting our counterfactual analysis ... ")
-            exact_match_count = 0
-            example_count = 0
-            for input_sequence, dual_input_sequence, intervene_attribute, intervene_time,                 output_sequence, target_sequence, original_target_sequence, original_dual_target_str_sequence,                 aux_acc_target in counterfactual_predict(
-                    data_iterator=data_iterator, model=model, 
-                    hi_model=hi_model,
-                    max_decoding_steps=max_decoding_steps, 
-                    eval_max_decoding_steps=eval_max_decoding_steps,
-                    pad_idx=dataset.target_vocabulary.pad_idx,
-                    sos_idx=dataset.target_vocabulary.sos_idx, 
-                    eos_idx=dataset.target_vocabulary.eos_idx, 
-                    max_examples_to_evaluate=max_testing_examples, 
-                    device=device,
-                    intervene_attribute=cfg["kwargs"]["intervene_attribute"],
-                    intervene_time=cfg["kwargs"]["intervene_time"],
-                    intervene_dimension_size=cfg["kwargs"]["intervene_dimension_size"],
-            ):
-                example_count += 1
-                accuracy = sequence_accuracy(output_sequence, target_sequence[0].tolist()[1:-1])
-                input_str_sequence = dataset.array_to_sentence(input_sequence[0].tolist(), vocabulary="input")
-                input_str_sequence = input_str_sequence[1:-1]  # Get rid of <SOS> and <EOS>
-                dual_input_str_sequence = dataset.array_to_sentence(dual_input_sequence[0].tolist(), vocabulary="input")
-                dual_input_str_sequence = dual_input_str_sequence[1:-1]  # Get rid of <SOS> and <EOS>
+            if cfg["kwargs"]["task_evaluate"]:
+                #################
+                #
+                # Task-based
+                #
+                #################
+                exact_match_count = 0
+                example_count = 0
+                for input_sequence, output_sequence, target_sequence, aux_acc_target, pred_pos_x_acc,                     pred_pos_y_acc, pred_pos_x, pred_pos_y, true_pos_x, true_pos_y in predict(
+                        data_iterator=data_iterator, model=model, hi_model=hi_model, 
+                        max_decoding_steps=max_decoding_steps, 
+                        pad_idx=dataset.target_vocabulary.pad_idx,
+                        sos_idx=dataset.target_vocabulary.sos_idx, 
+                        eos_idx=dataset.target_vocabulary.eos_idx, 
+                        max_examples_to_evaluate=max_testing_examples, 
+                        device=device,
+                        intervene_time=cfg["kwargs"]["intervene_time"],
+                        intervene_dimension_size=cfg["kwargs"]["intervene_dimension_size"],
+                ):
+                    example_count += 1
+                    accuracy = sequence_accuracy(output_sequence, target_sequence[0].tolist()[1:-1])
+                    input_str_sequence = dataset.array_to_sentence(input_sequence[0].tolist(), vocabulary="input")
+                    input_str_sequence = input_str_sequence[1:-1]  # Get rid of <SOS> and <EOS>
+                    target_str_sequence = dataset.array_to_sentence(target_sequence[0].tolist(), vocabulary="target")
+                    target_str_sequence = target_str_sequence[1:-1]  # Get rid of <SOS> and <EOS>
+                    output_str_sequence = dataset.array_to_sentence(output_sequence, vocabulary="target")
+                    if accuracy == 100:
+                        exact_match_count += 1
+                    output.append({"input": input_str_sequence, "prediction": output_str_sequence,
+                                   "target": target_str_sequence,
+                                   "accuracy": accuracy,
+                                   "exact_match": True if accuracy == 100 else False,
+                                   "pred_pos_x_acc": pred_pos_x_acc.tolist(), 
+                                   "pred_pos_y_acc": pred_pos_y_acc.tolist(), 
+                                   "pred_pos_exact_match": True if pred_pos_x_acc ==100 and pred_pos_y_acc == 100 else False,
+                                   "pred_pos": (pred_pos_x.tolist()[0]-5, pred_pos_y.tolist()[0]-5),
+                                   "true_pos": (true_pos_x.tolist()[0]-5, true_pos_y.tolist()[0]-5),
+                                  })      
+                exact_match = (exact_match_count/example_count)*100.0
+                logger.info(" Task Evaluation Exact Match: %5.2f " % (exact_match))
+                if not cfg["kwargs"]["counterfactual_evaluate"]:
+                    logger.info("Wrote predictions for {} examples.".format(example_count))
+                    json.dump(output, outfile, indent=4)
+                    return output_file_path
+            else:
+                logger.info("WARNING: Skipping regular task evaluation...")
+            
+            if cfg["kwargs"]["counterfactual_evaluate"]:
                 
-                target_str_sequence = dataset.array_to_sentence(target_sequence[0].tolist(), vocabulary="target")
-                original_target_str_sequence = dataset.array_to_sentence(original_target_sequence[0].tolist()[1:-1], vocabulary="target")
-                original_dual_target_str_sequence = dataset.array_to_sentence(original_dual_target_str_sequence[0].tolist()[1:-1], vocabulary="target")
-                target_str_sequence = target_str_sequence[1:-1]  # Get rid of <SOS> and <EOS>
-                output_str_sequence = dataset.array_to_sentence(output_sequence, vocabulary="target")
-                if accuracy == 100:
-                    exact_match_count += 1
-                output.append({"input": input_str_sequence, 
-                               "dual_input": dual_input_str_sequence,
-                               "intervene_attribute": intervene_attribute,
-                               "intervene_time": intervene_time,
-                               "prediction": output_str_sequence,
-                               "target": target_str_sequence,
-                               "main_target": original_target_str_sequence,
-                               "dual_target": original_dual_target_str_sequence,
-                               "accuracy": accuracy,
-                               "exact_match": True if accuracy == 100 else False,
-                               "position_accuracy": aux_acc_target})
-            logger.info("Wrote predictions for {} examples including counterfactual ones.".format(example_count))
-            json.dump(output, outfile, indent=4)
-            exact_match = (exact_match_count/example_count)*100.0
-            logger.info(" Counterfactual Evaluation Exact Match: %5.2f " % (exact_match))
-        
+                #################
+                #
+                # Counterfactual
+                #
+                #################
+                logger.info(" Starting our counterfactual analysis ... ")
+                exact_match_count = 0
+                example_count = 0
+                for input_sequence, dual_input_sequence, intervene_attribute, intervene_time,                     output_sequence, target_sequence, original_target_sequence, original_dual_target_str_sequence,                     aux_acc_target in counterfactual_predict(
+                        data_iterator=data_iterator, model=model, 
+                        hi_model=hi_model,
+                        max_decoding_steps=max_decoding_steps, 
+                        eval_max_decoding_steps=eval_max_decoding_steps,
+                        pad_idx=dataset.target_vocabulary.pad_idx,
+                        sos_idx=dataset.target_vocabulary.sos_idx, 
+                        eos_idx=dataset.target_vocabulary.eos_idx, 
+                        max_examples_to_evaluate=max_testing_examples, 
+                        device=device,
+                        intervene_attribute=cfg["kwargs"]["intervene_attribute"],
+                        intervene_time=cfg["kwargs"]["intervene_time"],
+                        intervene_dimension_size=cfg["kwargs"]["intervene_dimension_size"],
+                ):
+                    example_count += 1
+                    accuracy = sequence_accuracy(output_sequence, target_sequence[0].tolist()[1:-1])
+                    input_str_sequence = dataset.array_to_sentence(input_sequence[0].tolist(), vocabulary="input")
+                    input_str_sequence = input_str_sequence[1:-1]  # Get rid of <SOS> and <EOS>
+                    dual_input_str_sequence = dataset.array_to_sentence(dual_input_sequence[0].tolist(), vocabulary="input")
+                    dual_input_str_sequence = dual_input_str_sequence[1:-1]  # Get rid of <SOS> and <EOS>
+
+                    target_str_sequence = dataset.array_to_sentence(target_sequence[0].tolist(), vocabulary="target")
+                    original_target_str_sequence = dataset.array_to_sentence(original_target_sequence[0].tolist()[1:-1], vocabulary="target")
+                    original_dual_target_str_sequence = dataset.array_to_sentence(original_dual_target_str_sequence[0].tolist()[1:-1], vocabulary="target")
+                    target_str_sequence = target_str_sequence[1:-1]  # Get rid of <SOS> and <EOS>
+                    output_str_sequence = dataset.array_to_sentence(output_sequence, vocabulary="target")
+                    if accuracy == 100:
+                        exact_match_count += 1
+                    output.append({"input": input_str_sequence, 
+                                   "dual_input": dual_input_str_sequence,
+                                   "intervene_attribute": intervene_attribute,
+                                   "intervene_time": intervene_time,
+                                   "prediction": output_str_sequence,
+                                   "target": target_str_sequence,
+                                   "main_target": original_target_str_sequence,
+                                   "dual_target": original_dual_target_str_sequence,
+                                   "accuracy": accuracy,
+                                   "exact_match": True if accuracy == 100 else False,
+                                   "position_accuracy": aux_acc_target})
+                logger.info("Wrote predictions for {} examples including counterfactual ones.".format(example_count))
+                json.dump(output, outfile, indent=4)
+                exact_match = (exact_match_count/example_count)*100.0
+                logger.info(" Counterfactual Evaluation Exact Match: %5.2f " % (exact_match))
+
     return output_file_path
 
 
