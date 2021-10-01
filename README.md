@@ -1,5 +1,5 @@
 # ReaSCAN-Causal
-Causal Abstraction of Neural Models Trained to Solve ReaSCAN
+Towards Solving ReaSCAN Using Counterfactually Trained Neural Models
 
 Installation
 ==========================================================================
