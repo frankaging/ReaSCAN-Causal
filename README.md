@@ -15,13 +15,6 @@ Towards Solving ReaSCAN Using Counterfactually Trained Neural Models
 ## Citation
 If you use this repository, please cite the following two papers: [paper for counterfactual training](coming soon!), and [paper for the ReaSCAN dataset](https://arxiv.org/abs/2109.08994).
 ```stex
-  @article{geiger-etal-2021-counterfactual,
-    title={Inducing Symbolic Causal Structures to Produce Systematic and Interpretable Neural Networks},
-    author={Geiger, Atticus and Wu, Zhengxuan and Lu, Hanson and Kreiss, Elisa and Rozner, Joshua and Icard, Thomas and Goodman, Noah and Potts, Christopher},
-    journal={arxiv},
-    url={coming soon},
-    year={2021}}
-
   @article{wu-etal-2021-reascan,
     title={Rea{SCAN}: Compositional Reasoning in Language Grounding},
     author={Wu, Zhengxuan and Kreiss, Elisa and Ong, Desmond C. and Potts, Christopher},
