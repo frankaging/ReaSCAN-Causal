@@ -1,4 +1,4 @@
-# Interchange Intervention Training Training for Compositional Reasoning in Language Grounding
+# Interchange Intervention Training (IIT) for Compositional Reasoning in Language Grounding
 Towards Solving ReaSCAN Using Counterfactually Trained Neural Models
 
 ## Release Notes
@@ -13,8 +13,17 @@ Towards Solving ReaSCAN Using Counterfactually Trained Neural Models
 * [License](#license)
 
 ## Citation
-If you use this repository, please cite the following two papers: [paper for counterfactual training](coming soon!), and [paper for the ReaSCAN dataset](https://arxiv.org/abs/2109.08994).
+If you use this repository, please cite the following two papers: [paper for interchange intervention training](https://arxiv.org/abs/2112.00826), and [paper for the ReaSCAN dataset](https://arxiv.org/abs/2109.08994).
 ```stex
+  @article{geiger2021inducing,
+        title={Inducing Causal Structure for Interpretable Neural Networks}, 
+        author={Atticus Geiger and Zhengxuan Wu and Hanson Lu and Josh Rozner and Elisa Kreiss and Thomas Icard and Noah D. Goodman and Christopher Potts},
+        year={2021},
+        eprint={2112.00826},
+        archivePrefix={arXiv},
+        primaryClass={cs.LG}
+  }
+
   @article{wu-etal-2021-reascan,
     title={Rea{SCAN}: Compositional Reasoning in Language Grounding},
     author={Wu, Zhengxuan and Kreiss, Elisa and Ong, Desmond C. and Potts, Christopher},
