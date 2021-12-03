@@ -15,9 +15,9 @@ Towards Solving ReaSCAN Using Counterfactually Trained Neural Models
 ## Citation
 If you use this repository, please cite the following two papers: [paper for interchange intervention training](https://arxiv.org/abs/2112.00826), and [paper for the ReaSCAN dataset](https://arxiv.org/abs/2109.08994).
 ```stex
-  @article{geiger2021inducing,
+  @article{geiger-etal-2021-iit,
         title={Inducing Causal Structure for Interpretable Neural Networks}, 
-        author={Atticus Geiger and Zhengxuan Wu and Hanson Lu and Josh Rozner and Elisa Kreiss and Thomas Icard and Noah D. Goodman and Christopher Potts},
+        author={Geiger, Atticus and Wu, Zhengxuan and Lu, Hanson and Rozner, Josh and Kreiss, Elisa and Icard, Thomas and Goodman, Noah D. and Potts, Christopher},
         year={2021},
         eprint={2112.00826},
         archivePrefix={arXiv},
