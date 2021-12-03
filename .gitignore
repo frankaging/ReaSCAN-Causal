@@ -1,3 +1,4 @@
+tmp/
 gcnlstm_*/
 counterfactual_*/
 wandb/
